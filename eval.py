@@ -89,16 +89,16 @@ def print_pile_10k_metrics(metrics, tag="", model="", quantize=False):
     return csv_line
 
 
-def calculate_perplexity(model, tasks, num_samples=None, device="auto", **eval_kwargs):
+def calculate_perplexity(model, tasks, num_samples=None, device="auto", max_length=2048, **eval_kwargs):
     """Calculate perplexity using lm_eval."""
     
     # Base arguments
     base_args = {
         "model": "hf",
-        "model_args": f"pretrained={model},max_length=2048",
+        "model_args": f"pretrained={model},max_length={max_length}",
         "tasks": tasks,
         "num_fewshot": 0,
-        "batch_size": 35,
+        "batch_size": 20,
         "device": device,
     }
     
@@ -209,37 +209,39 @@ def main():
 
     # start_record_memory_history()
 
-
-    with torch.no_grad():
-        results = calculate_perplexity(
-            model=args.model,
-            tasks=args.task,
-            device=args.device,
-            num_samples=args.num_samples,
-            **eval_kwargs
-            )
-    # export_memory_snapshot()
-    # stop_record_memory_history()
-    print(f"Model: {args.model}")
-    print(f"Quantize: {args.quantize}")
-    print(f"Tag: {args.tag}")
-    for task in args.task:
-        print(f"Task: {task}")
-        print(f"Metrics: {results['results'][task]}")
-        
-        # Special formatting for pile_10k metrics
-        if task == "pile_10k":
-            print_pile_10k_metrics(
-                metrics=results['results'][task],
-                tag=args.tag,
+    for max_length in [512, 2048, 4096]:
+        with torch.no_grad():
+            results = calculate_perplexity(
                 model=args.model,
-                quantize=args.quantize
-            )
+                tasks=args.task,
+                device=args.device,
+                num_samples=args.num_samples,
+                max_length=max_length,
+                **eval_kwargs
+                )
+        # export_memory_snapshot()
+        # stop_record_memory_history()
+        print(f"Model: {args.model}")
+        print(f"Max length: {max_length}")
+        print(f"Quantize: {args.quantize}")
+        print(f"Tag: {args.tag}")
+        for task in args.task:
+            print(f"Task: {task}")
+            print(f"Metrics: {results['results'][task]}")
+            
+            # Special formatting for pile_10k metrics
+            if task == "pile_10k":
+                print_pile_10k_metrics(
+                    metrics=results['results'][task],
+                    tag=args.tag,
+                    model=args.model,
+                    quantize=args.quantize
+                )
 
-    if args.output:
-        output_filename = f"{args.output}_{args.tag}.json" if args.tag else args.output
-        with open(output_filename, 'w') as f:
-            json.dump(results, f, indent=2)
+        if args.output:
+            output_filename = f"{args.output}_{args.tag}.json" if args.tag else args.output
+            with open(output_filename, 'w') as f:
+                json.dump(results, f, indent=2)
     
     if args.visualize:
         # Create a combined tag that includes both the original tag and task names

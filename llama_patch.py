@@ -77,7 +77,7 @@ def eager_attention_forward(
     attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
     attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
 
-    # Check if quantization is enabled and apply to attention weights
+ 
     if hasattr(llama_fp4_attention_forward, 'quantize_enabled') and llama_fp4_attention_forward.quantize_enabled:
         if hasattr(module, 'fp4_quantizer'):
             # Get environment variable for attention weights quantization method
@@ -209,7 +209,10 @@ def llama_fp4_attention_forward(
 
     attention_interface: Callable = eager_attention_forward
 
-    self.config._attn_implementation = "eager"
+
+    ##### UNCOMMENT THIS FOR EAGER ATTENTION AND P QUANTIZATION #####
+
+    # self.config._attn_implementation = "eager"
 
     if self.config._attn_implementation != "eager":
         attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]

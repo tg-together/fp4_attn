@@ -1,7 +1,0 @@
-nvfp4sim.cu
-setup.py
-wrapper.cpp
-nvfp4sim.egg-info/PKG-INFO
-nvfp4sim.egg-info/SOURCES.txt
-nvfp4sim.egg-info/dependency_links.txt
-nvfp4sim.egg-info/top_level.txt
