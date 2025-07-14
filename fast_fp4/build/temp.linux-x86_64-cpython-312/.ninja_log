@@ -1,0 +1,19 @@
+# ninja log v5
+0	14288	1752019415571233893	/home/tanmaey/fp4_attn/eval/fast_fp4/build/temp.linux-x86_64-cpython-312/wrapper.o	ef6a2af1aa405905
+0	40947	1752019442218712016	/home/tanmaey/fp4_attn/eval/fast_fp4/build/temp.linux-x86_64-cpython-312/nvfp4sim.o	fb7329ebc67eb291
+14	18421	1752094254361090168	/home/tanmaey/fp4_attn/eval/fast_fp4/build/temp.linux-x86_64-cpython-312/wrapper.o	cc7a9244859d0df2
+14	45062	1752094280996556688	/home/tanmaey/fp4_attn/eval/fast_fp4/build/temp.linux-x86_64-cpython-312/nvfp4sim.o	74ebf8bfa8df2ff2
+15	44856	1752098051045049724	/home/tanmaey/fp4_attn/eval/fast_fp4/build/temp.linux-x86_64-cpython-312/nvfp4sim.o	74ebf8bfa8df2ff2
+15	45031	1752101168058616730	/home/tanmaey/fp4_attn/eval/fast_fp4/build/temp.linux-x86_64-cpython-312/nvfp4sim.o	74ebf8bfa8df2ff2
+14	44672	1752101611113742647	/home/tanmaey/fp4_attn/eval/fast_fp4/build/temp.linux-x86_64-cpython-312/nvfp4sim.o	74ebf8bfa8df2ff2
+15	44957	1752101750514950598	/home/tanmaey/fp4_attn/eval/fast_fp4/build/temp.linux-x86_64-cpython-312/nvfp4sim.o	74ebf8bfa8df2ff2
+14	45060	1752102084344264373	/home/tanmaey/fp4_attn/eval/fast_fp4/build/temp.linux-x86_64-cpython-312/nvfp4sim.o	74ebf8bfa8df2ff2
+14	18229	1752102489052159078	/home/tanmaey/fp4_attn/eval/fast_fp4/build/temp.linux-x86_64-cpython-312/wrapper.o	b1eda4a35012c978
+14	45351	1752102516167616097	/home/tanmaey/fp4_attn/eval/fast_fp4/build/temp.linux-x86_64-cpython-312/nvfp4sim.o	a9be70ed075aeefe
+14	44619	1752102620081535245	/home/tanmaey/fp4_attn/eval/fast_fp4/build/temp.linux-x86_64-cpython-312/nvfp4sim.o	a9be70ed075aeefe
+15	18049	1752103151482894054	/home/tanmaey/fp4_attn/eval/fast_fp4/build/temp.linux-x86_64-cpython-312/wrapper.o	cc7a9244859d0df2
+14	46144	1752103179570331609	/home/tanmaey/fp4_attn/eval/fast_fp4/build/temp.linux-x86_64-cpython-312/nvfp4sim.o	74ebf8bfa8df2ff2
+15	44256	1752103569442524401	/home/tanmaey/fp4_attn/eval/fast_fp4/build/temp.linux-x86_64-cpython-312/nvfp4sim.o	74ebf8bfa8df2ff2
+14	44959	1752106372186388170	/home/tanmaey/fp4_attn/eval/fast_fp4/build/temp.linux-x86_64-cpython-312/nvfp4sim.o	74ebf8bfa8df2ff2
+15	18164	1752182429493811321	/home/tanmaey/fp4_attn/eval/fast_fp4/build/temp.linux-x86_64-cpython-312/wrapper.o	b1eda4a35012c978
+15	44829	1752182456149281986	/home/tanmaey/fp4_attn/eval/fast_fp4/build/temp.linux-x86_64-cpython-312/nvfp4sim.o	a9be70ed075aeefe
