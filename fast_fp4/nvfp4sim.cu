@@ -47,7 +47,7 @@ using namespace nvcuda;
 
 template <typename T>
 void check(T result, char const *const func, const char *const file,
-           int const line) {
+           int64_t const line) {
   if (result) {
     fprintf(stderr, "CUDA error at %s:%d code=%d \"%s\" \n", file, line,
             static_cast<unsigned int>(result), func);
@@ -99,15 +99,15 @@ __global__ void f32_to_nvf4_kernel(
     const float* pxin
 ) {
     // each warp handles 2 groups of 16 scalars each
-    int groupIdx = blockIdx.x * 2 + threadIdx.x / 16;
+    int64_t groupIdx = ((int64_t)blockIdx.x) * 2 + threadIdx.x / 16;
 
     // load all 16 weights to all threads in the half-warp
     float x[16];
     float max_abs_x = 1e-10;
     {
-        float my_x = pxin[blockIdx.x * 32 + threadIdx.x];
+        float my_x = pxin[((int64_t)blockIdx.x) * 32 + threadIdx.x];
         #pragma unroll
-        for (int i = 0; i < 16; i++) {
+        for (int64_t i = 0; i < 16; i++) {
             x[i] = __shfl_sync(FULL_MASK, my_x, i, 16);
             max_abs_x = fmaxf(max_abs_x, fabsf(x[i]));   // work repeated on all threads
         }
@@ -124,7 +124,7 @@ __global__ void f32_to_nvf4_kernel(
         uint8_t u8[8];
     } xqs;
     #pragma unroll
-    for (int i = 0; i < 8; i++) {
+    for (int64_t i = 0; i < 8; i++) {
         xqs.u8[i] = f32_to_f4(x[2*i+0] * xscale_inv, x[2*i+1] * xscale_inv);
         float2 xhat = f4_to_f32(xqs.u8[i]);
         loss += (xhat.x * xscale - x[2*i+0]) * (xhat.x * xscale - x[2*i+0]);
@@ -142,7 +142,7 @@ __global__ void f32_to_nvf4_kernel(
     // Use XOR mode to perform butterfly reduction
     float min_loss = loss;
     #pragma unroll
-    for (int i=8; i>=1; i/=2) {
+    for (int64_t i=8; i>=1; i/=2) {
         min_loss = fminf(min_loss, __shfl_xor_sync(0xffffffff, min_loss, i));
     }
 
@@ -158,7 +158,7 @@ void f32_to_nvf4(
     torch::Tensor XSout,
     torch::Tensor Xin
 ) {
-    const int GROUP_SIZE = 16;
+    const int64_t GROUP_SIZE = 16;
 
     CHECK_INPUT(XQout);
     CHECK_INPUT(XSout);
@@ -169,7 +169,7 @@ void f32_to_nvf4(
     assert(Xin.dim() == 2);
     assert(Xin.sizes()[1] == GROUP_SIZE);
 
-    int N = Xin.sizes()[0];
+    int64_t N = Xin.sizes()[0];
     assert(XQout.sizes()[0] == N);
     assert(XSout.sizes()[0] == N);
     assert(N % 2 == 0);
@@ -178,8 +178,8 @@ void f32_to_nvf4(
     assert(XSout.dtype() == torch::kFloat8_e4m3fn);
     assert(Xin.dtype() == torch::kFloat32);
 
-    int BLOCKS = N / 2;
-    int THREADS = 32;
+    int64_t BLOCKS = N / 2;
+    int64_t THREADS = 32;
 
 
     auto stream = at::cuda::getCurrentCUDAStream().stream();
@@ -197,15 +197,15 @@ __global__ void f16_to_nvf4_kernel(
     const __half* pxin
 ) {
     // each warp handles 2 groups of 16 scalars each
-    int groupIdx = blockIdx.x * 2 + threadIdx.x / 16;
+    int64_t groupIdx = ((int64_t)blockIdx.x) * 2 + threadIdx.x / 16;
 
     // load all 16 weights to all threads in the half-warp
     float x[16];
     float max_abs_x = 1e-10;
     {
-        float my_x = __half2float(pxin[blockIdx.x * 32 + threadIdx.x]);
+        float my_x = __half2float(pxin[((int64_t)blockIdx.x) * 32 + threadIdx.x]);
         #pragma unroll
-        for (int i = 0; i < 16; i++) {
+        for (int64_t i = 0; i < 16; i++) {
             x[i] = __shfl_sync(FULL_MASK, my_x, i, 16);
             max_abs_x = fmaxf(max_abs_x, fabsf(x[i]));   // work repeated on all threads
         }
@@ -222,7 +222,7 @@ __global__ void f16_to_nvf4_kernel(
         uint8_t u8[8];
     } xqs;
     #pragma unroll
-    for (int i = 0; i < 8; i++) {
+    for (int64_t i = 0; i < 8; i++) {
         xqs.u8[i] = f32_to_f4(x[2*i+0] * xscale_inv, x[2*i+1] * xscale_inv);
         float2 xhat = f4_to_f32(xqs.u8[i]);
         loss += (xhat.x * xscale - x[2*i+0]) * (xhat.x * xscale - x[2*i+0]);
@@ -240,7 +240,7 @@ __global__ void f16_to_nvf4_kernel(
     // Use XOR mode to perform butterfly reduction
     float min_loss = loss;
     #pragma unroll
-    for (int i=8; i>=1; i/=2) {
+    for (int64_t i=8; i>=1; i/=2) {
         min_loss = fminf(min_loss, __shfl_xor_sync(0xffffffff, min_loss, i));
     }
 
@@ -256,7 +256,7 @@ void f16_to_nvf4(
     torch::Tensor XSout,
     torch::Tensor Xin
 ) {
-    const int GROUP_SIZE = 16;
+    const int64_t GROUP_SIZE = 16;
 
     CHECK_INPUT(XQout);
     CHECK_INPUT(XSout);
@@ -267,7 +267,7 @@ void f16_to_nvf4(
     assert(Xin.dim() == 2);
     assert(Xin.sizes()[1] == GROUP_SIZE);
 
-    int N = Xin.sizes()[0];
+    int64_t N = Xin.sizes()[0];
     assert(XQout.sizes()[0] == N);
     assert(XSout.sizes()[0] == N);
     assert(N % 2 == 0);
@@ -276,8 +276,8 @@ void f16_to_nvf4(
     assert(XSout.dtype() == torch::kFloat8_e4m3fn);
     assert(Xin.dtype() == torch::kFloat16);
 
-    int BLOCKS = N / 2;
-    int THREADS = 32;
+    int64_t BLOCKS = N / 2;
+    int64_t THREADS = 32;
 
     auto stream = at::cuda::getCurrentCUDAStream().stream();
 
@@ -295,7 +295,7 @@ __global__ void nvf4_to_f32_kernel(
     const uint8_t* pxsin
 ) {
     // each warp handles 2 groups of 16 scalars each
-    int groupIdx = blockIdx.x * 2 + threadIdx.x / 16;
+    int64_t groupIdx = ((int64_t)blockIdx.x) * 2 + threadIdx.x / 16;
 
     uint64_t xq = pxqin[groupIdx];
     uint8_t xs = pxsin[groupIdx];
@@ -303,7 +303,7 @@ __global__ void nvf4_to_f32_kernel(
     float xscale = __half2float(__nv_cvt_fp8_to_halfraw(xs, __NV_E4M3));
     float x = f4_to_f32((uint8_t)(xq >> (4 * (threadIdx.x & 15)))).x;
 
-    pxout[blockIdx.x * 32 + threadIdx.x] = x * xscale;
+    pxout[((int64_t)blockIdx.x) * 32 + threadIdx.x] = x * xscale;
 }
 
 void nvf4_to_f32(
@@ -311,7 +311,7 @@ void nvf4_to_f32(
     torch::Tensor XQin,
     torch::Tensor XSin
 ) {
-    const int GROUP_SIZE = 16;
+    const int64_t GROUP_SIZE = 16;
 
     CHECK_INPUT(Xout);
     CHECK_INPUT(XQin);
@@ -322,7 +322,7 @@ void nvf4_to_f32(
     assert(Xout.dim() == 2);
     assert(Xout.sizes()[1] == GROUP_SIZE);
 
-    int N = Xout.sizes()[0];
+    int64_t N = Xout.sizes()[0];
     assert(XQin.sizes()[0] == N);
     assert(XSin.sizes()[0] == N);
     assert(N % 2 == 0);
@@ -331,8 +331,8 @@ void nvf4_to_f32(
     assert(XSin.dtype() == torch::kFloat8_e4m3fn);
     assert(Xout.dtype() == torch::kFloat32);
 
-    int BLOCKS = N / 2;
-    int THREADS = 32;
+    int64_t BLOCKS = N / 2;
+    int64_t THREADS = 32;
 
     auto stream = at::cuda::getCurrentCUDAStream().stream();
 
@@ -350,7 +350,7 @@ __global__ void nvf4_to_f16_kernel(
     const uint8_t* pxsin
 ) {
     // each warp handles 2 groups of 16 scalars each
-    int groupIdx = blockIdx.x * 2 + threadIdx.x / 16;
+    int64_t groupIdx = ((int64_t)blockIdx.x) * 2 + threadIdx.x / 16;
 
     uint64_t xq = pxqin[groupIdx];
     uint8_t xs = pxsin[groupIdx];
@@ -358,7 +358,7 @@ __global__ void nvf4_to_f16_kernel(
     float xscale = __half2float(__nv_cvt_fp8_to_halfraw(xs, __NV_E4M3));
     float x = f4_to_f32((uint8_t)(xq >> (4 * (threadIdx.x & 15)))).x;
 
-    pxout[blockIdx.x * 32 + threadIdx.x] = __float2half_rn(x * xscale);
+    pxout[((int64_t)blockIdx.x) * 32 + threadIdx.x] = __float2half_rn(x * xscale);
 }
 
 
@@ -367,7 +367,7 @@ void nvf4_to_f16(
     torch::Tensor XQin,
     torch::Tensor XSin
 ) {
-    const int GROUP_SIZE = 16;
+    const int64_t GROUP_SIZE = 16;
 
     CHECK_INPUT(Xout);
     CHECK_INPUT(XQin);
@@ -378,7 +378,7 @@ void nvf4_to_f16(
     assert(Xout.dim() == 2);
     assert(Xout.sizes()[1] == GROUP_SIZE);
 
-    int N = Xout.sizes()[0];
+    int64_t N = Xout.sizes()[0];
     assert(XQin.sizes()[0] == N);
     assert(XSin.sizes()[0] == N);
     assert(N % 2 == 0);
@@ -387,8 +387,8 @@ void nvf4_to_f16(
     assert(XSin.dtype() == torch::kFloat8_e4m3fn);
     assert(Xout.dtype() == torch::kFloat16);
 
-    int BLOCKS = N / 2;
-    int THREADS = 32;
+    int64_t BLOCKS = N / 2;
+    int64_t THREADS = 32;
 
     auto stream = at::cuda::getCurrentCUDAStream().stream();
 
@@ -406,15 +406,15 @@ __global__ void f32_to_nvf4_nosearch_kernel(
     const float* pxin
 ) {
     // each warp handles 2 groups of 16 scalars each
-    int groupIdx = blockIdx.x * 2 + threadIdx.x / 16;
+    int64_t groupIdx = ((int64_t)blockIdx.x) * 2 + threadIdx.x / 16;
 
     // load all 16 weights to all threads in the half-warp
     float x[16];
     float max_abs_x = 1e-10;
     {
-        float my_x = pxin[blockIdx.x * 32 + threadIdx.x];
+        float my_x = pxin[((int64_t)blockIdx.x) * 32 + threadIdx.x];
         #pragma unroll
-        for (int i = 0; i < 16; i++) {
+        for (int64_t i = 0; i < 16; i++) {
             x[i] = __shfl_sync(FULL_MASK, my_x, i, 16);
             max_abs_x = fmaxf(max_abs_x, fabsf(x[i]));   // work repeated on all threads
         }
@@ -431,7 +431,7 @@ __global__ void f32_to_nvf4_nosearch_kernel(
         uint8_t u8[8];
     } xqs;
     #pragma unroll
-    for (int i = 0; i < 8; i++) {
+    for (int64_t i = 0; i < 8; i++) {
         xqs.u8[i] = f32_to_f4(x[2*i+0] * xscale_inv, x[2*i+1] * xscale_inv);
         float2 xhat = f4_to_f32(xqs.u8[i]);
         loss += (xhat.x * xscale - x[2*i+0]) * (xhat.x * xscale - x[2*i+0]);
@@ -449,7 +449,7 @@ __global__ void f32_to_nvf4_nosearch_kernel(
     // Use XOR mode to perform butterfly reduction
     float min_loss = loss;
     #pragma unroll
-    for (int i=8; i>=1; i/=2) {
+    for (int64_t i=8; i>=1; i/=2) {
         min_loss = fminf(min_loss, __shfl_xor_sync(0xffffffff, min_loss, i));
     }
 
@@ -465,7 +465,7 @@ void f32_to_nvf4_nosearch(
     torch::Tensor XSout,
     torch::Tensor Xin
 ) {
-    const int GROUP_SIZE = 16;
+    const int64_t GROUP_SIZE = 16;
 
     CHECK_INPUT(XQout);
     CHECK_INPUT(XSout);
@@ -476,7 +476,7 @@ void f32_to_nvf4_nosearch(
     assert(Xin.dim() == 2);
     assert(Xin.sizes()[1] == GROUP_SIZE);
 
-    int N = Xin.sizes()[0];
+    int64_t N = Xin.sizes()[0];
     assert(XQout.sizes()[0] == N);
     assert(XSout.sizes()[0] == N);
     assert(N % 2 == 0);
@@ -485,9 +485,10 @@ void f32_to_nvf4_nosearch(
     assert(XSout.dtype() == torch::kFloat8_e4m3fn);
     assert(Xin.dtype() == torch::kFloat32);
 
-    int BLOCKS = N / 2;
-    int THREADS = 32;
+    int64_t BLOCKS = N / 2;
+    int64_t THREADS = 32;   
 
+    std::cout << "N: " << N << std::endl;
     auto stream = at::cuda::getCurrentCUDAStream().stream();
 
     f32_to_nvf4_nosearch_kernel<<<BLOCKS, THREADS, 0, stream>>>(

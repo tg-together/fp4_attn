@@ -73,8 +73,8 @@ def eager_attention_forward(
         causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
         attn_weights = attn_weights + causal_mask
 
-
     attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
+
     attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
 
  
@@ -97,6 +97,7 @@ def eager_attention_forward(
             
             # Reshape back to original shape
             attn_weights = attn_weights_2d.view(original_shape)
+
 
     attn_output = torch.matmul(attn_weights, value_states)
     attn_output = attn_output.transpose(1, 2).contiguous()
@@ -122,17 +123,19 @@ def llama_fp4_attention_forward(
         inferred_dtype = self.q_proj.weight.dtype
         
         # Get environment variables for configuration
-        use_kernel = os.getenv('FP4_USE_KERNEL', 'false').lower() == 'true'
+        use_search = os.getenv('FP4_USE_SEARCH', 'false').lower() == 'true'
         
         # Initialize FP4Quantizer with appropriate parameters
         self.fp4_quantizer = FP4Quantizer(
             block_size=16,  # Common block size for attention quantization
             float4_e2m1_max=6.0,  # Max value for FP4 E2M1 format
+            float8_e4m3_max=448.0,  # Max value for FP8 E4M3 format
             global_sf=0.5,  # Global scale factor
             dequant_dtype=inferred_dtype,
-            use_kernel=use_kernel
+            use_search=use_search
         )
         self.fp4_quantizer.float4_e2m1_max = self.fp4_quantizer.float4_e2m1_max.to(device)
+        self.fp4_quantizer.float8_e4m3_max = self.fp4_quantizer.float8_e4m3_max.to(device)
         self.fp4_quantizer.global_sf = self.fp4_quantizer.global_sf.to(device)
         self.fp4_quantizer.zero_tensor = self.fp4_quantizer.zero_tensor.to(device)
         self.fp4_quantizer.one_tensor = self.fp4_quantizer.one_tensor.to(device)
@@ -182,12 +185,16 @@ def llama_fp4_attention_forward(
             # start_time = time.time_ns()
             # Apply quantization
             if use_dual_quant_q:
+                
                 q2d = self.fp4_quantizer.dual_nvfp4_fake_quant(q2d)
             else:
+                
                 q2d = self.fp4_quantizer.single_nvfp4_fake_quant(q2d)
             
             k2d = self.fp4_quantizer.single_nvfp4_fake_quant(k2d)
-            v2d = self.fp4_quantizer.single_nvfp4_fake_quant(v2d.T).T
+            
+            v2d = self.fp4_quantizer.single_nvfp4_fake_quant(v2d.T, global_scale_aligned=False).T
+            
             # print(f"Time taken: {(time.time_ns() - start_time)/1e6:.4f} ms\n")
 
             # Collect differences if visualizing
@@ -212,10 +219,18 @@ def llama_fp4_attention_forward(
 
     ##### UNCOMMENT THIS FOR EAGER ATTENTION AND P QUANTIZATION #####
 
-    # self.config._attn_implementation = "eager"
+    self.config._attn_implementation = "eager"
 
     if self.config._attn_implementation != "eager":
         attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
+
+
+    if torch.isnan(key_states).any() or torch.isnan(value_states).any() or torch.isnan(query_states).any():
+        print("K nan:", torch.isnan(key_states).any())
+        print("V nan:", torch.isnan(value_states).any())
+        print("Q nan:", torch.isnan(query_states).any())
+        raise
+
 
 
     attn_output, attn_weights = attention_interface(

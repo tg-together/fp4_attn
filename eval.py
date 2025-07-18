@@ -204,12 +204,12 @@ def main():
     if args.quantize:
         llama_fp4_attention_forward.quantize_enabled = args.quantize
 
-    if args.quantize or args.visualize:
-        patch_attention()   ## Enable FP4 attention
+    # if args.quantize or args.visualize:
+    patch_attention()   ## Enable FP4 attention
 
     # start_record_memory_history()
 
-    for max_length in [512, 2048, 4096]:
+    for max_length in [2048]:
         with torch.no_grad():
             results = calculate_perplexity(
                 model=args.model,
