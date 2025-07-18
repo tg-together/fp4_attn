@@ -188,17 +188,14 @@ class FP4Quantizer(nn.Module):
     #     return result
     def single_nvfp4_qd_nosearch(self, x:Tensor, global_sf: float = None, global_scale_aligned : bool = True):
 
-        torch.cuda.empty_cache()
 
         x=x.to(torch.float32)
 
         m_orig, n_orig = x.shape
-        n=n_orig
-        m=m_orig
+        pad_cols = (self.block_size - n_orig % self.block_size) % self.block_size
+        pad_rows = m_orig % 2  # Will be 1 if odd, 0 if even
 
-        if n_orig % self.block_size != 0 or m_orig % 2 != 0:
-            pad_cols = self.block_size - (n_orig % self.block_size) if n_orig % self.block_size != 0 else 0
-            pad_rows = 1 if m_orig % 2 != 0 else 0
+        if pad_cols != 0 or pad_rows != 0:
             x = torch.nn.functional.pad(x, (0, pad_cols, 0, pad_rows), value=0.0)
             n = x.shape[1]
             m = x.shape[0]
@@ -239,23 +236,21 @@ class FP4Quantizer(nn.Module):
         if n != n_orig or m != m_orig:
             reconstructed_f32 = reconstructed_f32[:m_orig, :n_orig]
 
-        torch.cuda.empty_cache()
+
         return reconstructed_f32.to(torch.bfloat16)
 
 
     def single_nvfp4_qd_searched(self, x:Tensor, global_sf: float = None, global_scale_aligned : bool = True):
 
-        torch.cuda.empty_cache()
+
 
         x=x.to(torch.float32)
 
         m_orig, n_orig = x.shape
-        n=n_orig
-        m=m_orig
+        pad_cols = (self.block_size - n_orig % self.block_size) % self.block_size
+        pad_rows = m_orig % 2  # Will be 1 if odd, 0 if even
 
-        if n_orig % self.block_size != 0 or m_orig % 2 != 0:
-            pad_cols = self.block_size - (n_orig % self.block_size) if n_orig % self.block_size != 0 else 0
-            pad_rows = 1 if m_orig % 2 != 0 else 0
+        if pad_cols != 0 or pad_rows != 0:
             x = torch.nn.functional.pad(x, (0, pad_cols, 0, pad_rows), value=0.0)
             n = x.shape[1]
             m = x.shape[0]
@@ -296,7 +291,7 @@ class FP4Quantizer(nn.Module):
         if n != n_orig or m != m_orig:
             reconstructed_f32 = reconstructed_f32[:m_orig, :n_orig]
 
-        torch.cuda.empty_cache()
+
         return reconstructed_f32.to(torch.bfloat16)
 
     def dual_nvfp4_fake_quant(self, x: Tensor, global_sf: float = None, global_scale_aligned : bool = True):
