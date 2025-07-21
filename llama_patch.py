@@ -53,7 +53,6 @@ except ImportError:
         
 
 #         print(f"MSE_{tag}:{k_mse.min().item()},{k_mse.max().item()},{k_mse.mean().item()}")
-
 def eager_attention_forward(
     module: nn.Module,
     query: torch.Tensor,
@@ -64,7 +63,6 @@ def eager_attention_forward(
     dropout: float = 0.0,
     **kwargs: Unpack[TransformersKwargs],
 ):
-
     key_states = repeat_kv(key, module.num_key_value_groups)
     value_states = repeat_kv(value, module.num_key_value_groups)
 
@@ -74,35 +72,83 @@ def eager_attention_forward(
         attn_weights = attn_weights + causal_mask
 
     attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
-
     attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
-
- 
-    if hasattr(llama_fp4_attention_forward, 'quantize_enabled') and llama_fp4_attention_forward.quantize_enabled:
-        if hasattr(module, 'fp4_quantizer'):
-            # Get environment variable for attention weights quantization method
-            use_dual_quant_attn = os.getenv('FP4_USE_DUAL_QUANT_ATTN', 'true').lower() == 'true'
-            
-            # Store original shape
-            original_shape = attn_weights.shape
-            
-            # Reshape to 2D: [batch_size * num_heads * seq_len, seq_len]
-            attn_weights_2d = attn_weights.view(-1, attn_weights.shape[-1])
-            
-            # Apply quantization
-            if use_dual_quant_attn:
-                attn_weights_2d = module.fp4_quantizer.dual_nvfp4_fake_quant(attn_weights_2d)
-            else:
-                attn_weights_2d = module.fp4_quantizer.single_nvfp4_fake_quant(attn_weights_2d)
-            
-            # Reshape back to original shape
-            attn_weights = attn_weights_2d.view(original_shape)
-
-
     attn_output = torch.matmul(attn_weights, value_states)
     attn_output = attn_output.transpose(1, 2).contiguous()
 
     return attn_output, attn_weights
+
+
+def eager_attention_forward_quantized(
+    module: nn.Module,
+    Qq_hi: torch.Tensor,
+    Qq_lo: torch.Tensor,
+    Qs_hi: torch.Tensor,
+    Qs_lo: torch.Tensor,
+    Kq: torch.Tensor,
+    Ks: torch.Tensor,
+    Vq: torch.Tensor,
+    Vs: torch.Tensor,
+    attention_mask: Optional[torch.Tensor],
+    scaling: float,
+    dropout: float = 0.0,
+    **kwargs: Unpack[TransformersKwargs],
+):
+
+
+    Kq=repeat_kv(Kq, module.num_key_value_groups)
+    Vq=repeat_kv(Vq, module.num_key_value_groups)
+
+
+
+    attn_weights = ((Qs_hi * (Qq_hi @ Kq.transpose(2, 3)) *Ks.transpose(2, 3)) +  (Qs_lo * (Qq_lo @ Kq.transpose(2, 3)) *Ks.transpose(2, 3))  )* scaling
+
+
+    if attention_mask is not None:
+        causal_mask = attention_mask[:, :, :, : (Ks*Kq).shape[-2]]
+        attn_weights = attn_weights + causal_mask
+
+    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32)
+
+    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+
+    attn_weights_scaled=attn_weights * Vs.transpose(2, 3)
+
+    if hasattr(llama_fp4_attention_forward, 'quantize_enabled') and llama_fp4_attention_forward.quantize_enabled:
+        if hasattr(module, 'fp4_quantizer'):
+            # Get environment variable for attention weights quantization method
+            use_dual_quant_attn = module.use_dual_quant_attn
+            
+            # Store original shape
+            original_shape = attn_weights_scaled.shape
+            
+            # Reshape to 2D: [batch_size * num_heads * seq_len, seq_len]
+            attn_weights_2d = attn_weights_scaled.view(-1, attn_weights_scaled.shape[-1])
+
+            
+            # Apply quantization
+            if use_dual_quant_attn:
+                Aq_hi, Aq_lo, As_hi, As_lo = module.fp4_quantizer.dual_nvfp4(attn_weights_2d, search=module.use_search)
+
+                Aq_hi = Aq_hi.reshape(original_shape)
+                Aq_lo = Aq_lo.reshape(original_shape)
+                As_hi = As_hi.reshape(*original_shape[:-1],1)
+                As_lo = As_lo.reshape(*original_shape[:-1],1)
+
+
+            else:
+
+                Aq_hi,As_hi = module.fp4_quantizer.single_nvfp4(attn_weights_2d, search=module.use_search)
+                Aq_hi = Aq_hi.reshape(original_shape)
+                As_hi = As_hi.reshape(*original_shape[:-1],1)
+                Aq_lo = torch.zeros_like(Aq_hi)
+                As_lo = torch.zeros_like(As_hi)
+
+
+    attn_output = (As_hi* (Aq_hi @ Vq)) + (As_lo* (Aq_lo @ Vq))
+    attn_output = attn_output.transpose(1, 2).contiguous()
+
+    return attn_output.to(torch.bfloat16), attn_weights.to(torch.bfloat16)
 
 
 def llama_fp4_attention_forward(
@@ -120,23 +166,18 @@ def llama_fp4_attention_forward(
     # Initialize FP4Quantizer if not already present
     if not hasattr(self, 'fp4_quantizer'):
         # Infer dtype from q_proj weight
-        inferred_dtype = self.q_proj.weight.dtype
+        self.dequant_dtype = self.q_proj.weight.dtype
         
         # Get environment variables for configuration
-        use_search = os.getenv('FP4_USE_SEARCH', 'false').lower() == 'true'
+        self.use_search = os.getenv('FP4_USE_SEARCH', 'false').lower() == 'true'
+        self.use_dual_quant_q = os.getenv('FP4_USE_DUAL_QUANT_Q', 'true').lower() == 'true'
+        self.use_dual_quant_attn = os.getenv('FP4_USE_DUAL_QUANT_ATTN', 'true').lower() == 'true'
         
         # Initialize FP4Quantizer with appropriate parameters
-        self.fp4_quantizer = FP4Quantizer(
-            block_size=16,  # Common block size for attention quantization
-            float4_e2m1_max=6.0,  # Max value for FP4 E2M1 format
-            float8_e4m3_max=448.0,  # Max value for FP8 E4M3 format
-            global_sf=0.5,  # Global scale factor
-            dequant_dtype=inferred_dtype,
-            use_search=use_search
-        )
+        self.fp4_quantizer = FP4Quantizer(global_sf_max=1536)
         self.fp4_quantizer.float4_e2m1_max = self.fp4_quantizer.float4_e2m1_max.to(device)
         self.fp4_quantizer.float8_e4m3_max = self.fp4_quantizer.float8_e4m3_max.to(device)
-        self.fp4_quantizer.global_sf = self.fp4_quantizer.global_sf.to(device)
+        self.fp4_quantizer.global_sf_max = self.fp4_quantizer.global_sf_max.to(device)
         self.fp4_quantizer.zero_tensor = self.fp4_quantizer.zero_tensor.to(device)
         self.fp4_quantizer.one_tensor = self.fp4_quantizer.one_tensor.to(device)
 
@@ -156,6 +197,8 @@ def llama_fp4_attention_forward(
 
 
     cos, sin = position_embeddings
+
+    query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
     
     
     # Check if we need to reshape (for quantization or visualization)
@@ -163,51 +206,91 @@ def llama_fp4_attention_forward(
                      (hasattr(llama_fp4_attention_forward, 'visualize') and llama_fp4_attention_forward.visualize))
     
     if needs_reshape:
+
         # Reshape to 2D for quantization/visualization
         q2d = query_states.permute(0, 2, 1, 3).reshape(B * T, H_q * D)
         k2d = key_states.permute(0, 2, 1, 3).reshape(B * T, H_kv * D)
         v2d = value_states.permute(0, 2, 1, 3).reshape(B * T, H_kv * D)
+
+        # q_mean=torch.mean(q2d,dim=0,keepdim=True)
+        # k_mean=torch.mean(k2d,dim=0,keepdim=True)
+        # v_mean=torch.mean(v2d,dim=0,keepdim=True)
+
+        # q_mean=torch.zeros_like(q2d)
+        # k_mean=torch.zeros_like(k2d)
+        # v_mean=torch.zeros_like(v2d)
+
+        # q2d=q2d-q_mean
+        # k2d=k2d-k_mean
+        # v2d=v2d-v_mean
+
         
         if hasattr(llama_fp4_attention_forward, 'visualize') and llama_fp4_attention_forward.visualize:
             collect_qkv(q2d, k2d, v2d, self.layer_idx)
         # Check if quantization is enabled
         if hasattr(llama_fp4_attention_forward, 'quantize_enabled') and llama_fp4_attention_forward.quantize_enabled:
-            # Store original values for comparison
-            if hasattr(llama_fp4_attention_forward, 'visualize') and llama_fp4_attention_forward.visualize:
-                pass
-            q2d_orig = q2d.clone()
-            k2d_orig = k2d.clone()
-            v2d_orig = v2d.clone()
+
             
             # Get environment variable for query quantization method
-            use_dual_quant_q = os.getenv('FP4_USE_DUAL_QUANT_Q', 'true').lower() == 'true'
+            
 
             # start_time = time.time_ns()
             # Apply quantization
-            if use_dual_quant_q:
+            if self.use_dual_quant_q:
+
+
                 
-                q2d = self.fp4_quantizer.dual_nvfp4_fake_quant(q2d)
+                Qq_hi, Qq_lo, Qs_hi, Qs_lo = self.fp4_quantizer.dual_nvfp4(q2d, search=self.use_search)
+
+                Qq_hi = Qq_hi.reshape(B, T, H_q, D).permute(0, 2, 1, 3)
+                Qq_lo = Qq_lo.reshape(B, T, H_q, D).permute(0, 2, 1, 3)
+                Qs_hi = Qs_hi.reshape(B, T, 1, 1).permute(0, 2, 1, 3)
+                Qs_lo = Qs_lo.reshape(B, T, 1, 1).permute(0, 2, 1, 3)
+                # q_mean=q_mean.reshape(1, 1, H_q, D).permute(0, 2, 1, 3)
+
+                
             else:
-                
-                q2d = self.fp4_quantizer.single_nvfp4_fake_quant(q2d)
+
+                Qq_hi, Qs_hi = self.fp4_quantizer.single_nvfp4(q2d, search=self.use_search)
+                Qq_hi = Qq_hi.reshape(B, T, H_q, D).permute(0, 2, 1, 3)
+                Qs_hi = Qs_hi.reshape(B, T, 1, 1).permute(0, 2, 1, 3)
+                Qq_lo = torch.zeros_like(Qq_hi)
+                Qs_lo = torch.zeros_like(Qs_hi)
+                # q_mean=q_mean.reshape(1, 1, H_q, D).permute(0, 2, 1, 3)
+
+
+  
+
+            Kq,Ks = self.fp4_quantizer.single_nvfp4(k2d, search=self.use_search)
+            Kq = Kq.reshape(B, T, H_kv, D).permute(0, 2, 1, 3)
+            Ks = Ks.reshape(B, T, 1, 1).permute(0, 2, 1, 3)
+            # k_mean=k_mean.reshape(1, 1, H_kv, D).permute(0, 2, 1, 3)
+
             
-            k2d = self.fp4_quantizer.single_nvfp4_fake_quant(k2d)
+            Vq,Vs = self.fp4_quantizer.single_nvfp4(v2d.T, global_scale_aligned=False, search=self.use_search)
+            Vq=Vq.T
+            Vs=Vs.T
+            Vq = Vq.reshape(B, T, H_kv, D).permute(0, 2, 1, 3)
+            Vs = Vs.reshape(B, T, 1, 1).permute(0, 2, 1, 3)
+            # v_mean=v_mean.reshape(1, 1, H_kv, D).permute(0, 2, 1, 3)
+
+            if hasattr(llama_fp4_attention_forward, 'visualize') and llama_fp4_attention_forward.visualize:
+                collect_qkv_diff((Qq_hi*Qs_hi + Qq_lo*Qs_lo).permute(0, 2, 1, 3).reshape(B * T, H_q * D), (Kq*Ks).permute(0, 2, 1, 3).reshape(B * T, H_kv * D) , (Vq*Vs).permute(0, 2, 1, 3).reshape(B * T, H_kv * D) , q2d, k2d, v2d, self.layer_idx)
             
-            v2d = self.fp4_quantizer.single_nvfp4_fake_quant(v2d.T, global_scale_aligned=False).T
-            
-            # print(f"Time taken: {(time.time_ns() - start_time)/1e6:.4f} ms\n")
+
+
+            # query_states = (Qq_hi*Qs_hi + Qq_lo*Qs_lo) 
+            key_states = (Kq*Ks) 
+            value_states = (Vq*Vs) 
 
             # Collect differences if visualizing
-            if hasattr(llama_fp4_attention_forward, 'visualize') and llama_fp4_attention_forward.visualize:
-                collect_qkv_diff(q2d_orig, k2d_orig, v2d_orig, q2d, k2d, v2d, self.layer_idx)
+
 
 
         # Reshape back to 4D
-        query_states = q2d.reshape(B, T, H_q, D).permute(0, 2, 1, 3)
-        key_states = k2d.reshape(B, T, H_kv, D).permute(0, 2, 1, 3)
-        value_states = v2d.reshape(B, T, H_kv, D).permute(0, 2, 1, 3)
 
-    query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+
+    
 
     if past_key_value is not None:
         # sin and cos are specific to RoPE models; cache_position needed for the static cache
@@ -231,20 +314,43 @@ def llama_fp4_attention_forward(
         print("Q nan:", torch.isnan(query_states).any())
         raise
 
+    if hasattr(llama_fp4_attention_forward, 'quantize_enabled') and llama_fp4_attention_forward.quantize_enabled:
 
 
-    attn_output, attn_weights = attention_interface(
-        self,
-        query_states,
-        key_states,
-        value_states,
-        attention_mask,
-        dropout=0.0 if not self.training else self.attention_dropout,
-        scaling=self.scaling,
-        **kwargs,
-    )
-    torch.cuda.empty_cache()
-    
+        attn_output, attn_weights = eager_attention_forward_quantized(
+            self,
+            Qq_hi,
+            Qq_lo,
+            Qs_hi,
+            Qs_lo,
+            Kq,
+            Ks,
+            Vq,
+            Vs,
+            attention_mask,
+            dropout=0.0 if not self.training else self.attention_dropout,
+            scaling=self.scaling,
+            **kwargs,
+        )
+
+    else:
+
+
+        attn_output, attn_weights = eager_attention_forward(
+            self,
+            query_states,
+            key_states,
+            value_states,
+            attention_mask,
+            dropout=0.0 if not self.training else self.attention_dropout,
+            scaling=self.scaling,
+            **kwargs,
+        )
+
+    # print(torch.mean((attn_output_ref-attn_output)**2))
+    # print(torch.mean((attn_weights_ref-attn_weights)**2))
+    # raise
+
     attn_output = attn_output.reshape(*input_shape, -1).contiguous()
     attn_output = self.o_proj(attn_output)
     return attn_output, attn_weights

@@ -488,7 +488,7 @@ void f32_to_nvf4_nosearch(
     int64_t BLOCKS = N / 2;
     int64_t THREADS = 32;   
 
-    std::cout << "N: " << N << std::endl;
+
     auto stream = at::cuda::getCurrentCUDAStream().stream();
 
     f32_to_nvf4_nosearch_kernel<<<BLOCKS, THREADS, 0, stream>>>(
