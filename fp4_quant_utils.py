@@ -21,13 +21,16 @@ class FP4Quantizer(nn.Module):
                  block_size: int = 16,
                  float4_e2m1_max: float = 6.0,
                  float8_e4m3_max: float = 448.0,
-                 global_sf_max: float = 256*6,
+                 global_sf_max = 256*6,
                  dequant_dtype: torch.dtype = torch.float32):
         super().__init__()
         self.block_size = block_size
         self.float4_e2m1_max = torch.tensor(float4_e2m1_max, dtype=dequant_dtype)
         self.float8_e4m3_max = torch.tensor(float8_e4m3_max, dtype=dequant_dtype)
-        self.global_sf_max = torch.tensor(global_sf_max, dtype=dequant_dtype)
+        if global_sf_max is not None:
+            self.global_sf_max = torch.tensor(global_sf_max, dtype=dequant_dtype)
+        else:
+            self.global_sf_max = None
         self.zero_tensor = torch.tensor(0.0, dtype=dequant_dtype)
         self.one_tensor = torch.tensor(1.0, dtype=dequant_dtype)
         self.dequant_dtype = dequant_dtype
@@ -126,14 +129,16 @@ class FP4Quantizer(nn.Module):
             x = torch.nn.functional.pad(x, (0, pad_size), value=0.0)
             n = x.shape[1]
 
-        if global_scale_aligned:
-            global_sf = torch.max(abs(x), dim=1, keepdim=True)[0].to(self.dequant_dtype)
-        else:
-            global_sf = torch.max(abs(x), dim=0, keepdim=True)[0].to(self.dequant_dtype)
+        if self.global_sf_max is not None:
+            if global_scale_aligned:
+                global_sf = torch.max(abs(x), dim=1, keepdim=True)[0].to(self.dequant_dtype)
+            else:
+                global_sf = torch.max(abs(x), dim=0, keepdim=True)[0].to(self.dequant_dtype)
 
-        global_sf = global_sf * self.get_reciprocal(self.global_sf_max)
+            
+                global_sf = global_sf * self.get_reciprocal(self.global_sf_max)
 
-        x=x*self.get_reciprocal(global_sf)
+            x=x*self.get_reciprocal(global_sf)
 
 
         x = x.reshape(m, n // self.block_size, self.block_size)
@@ -156,7 +161,9 @@ class FP4Quantizer(nn.Module):
         x = x * scale
         x = x.view(m, n)
 
-        x=x*global_sf
+        if self.global_sf_max is not None:
+            x=x*global_sf
+
         # Return original size if we padded
         if n != n_orig:
             x = x[:, :n_orig]
@@ -190,7 +197,7 @@ class FP4Quantizer(nn.Module):
     #     return result
     def single_nvfp4_qd_nosearch(self, x:Tensor, global_scale_aligned : bool = True):
 
-        print("single_nvfp4_qd_nosearch")
+        # print("single_nvfp4_qd_nosearch")
 
         x=x.to(torch.float32)
 
@@ -245,7 +252,7 @@ class FP4Quantizer(nn.Module):
 
     def single_nvfp4_qd_searched(self, x:Tensor, global_scale_aligned : bool = True):
 
-        print("single_nvfp4_qd_searched")
+        # print("single_nvfp4_qd_searched")
 
         x=x.to(torch.float32)
 
