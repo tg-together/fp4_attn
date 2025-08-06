@@ -18,21 +18,20 @@ class FP4Quantizer(nn.Module):
     """FP4 Quantizer module that handles FP4 quantization and dequantization."""
     
     def __init__(self, 
-                 block_size: int,
-                 float4_e2m1_max: float,
-                 float8_e4m3_max: float,
-                 global_sf: float,
-                 dequant_dtype: torch.dtype = torch.bfloat16,
-                 use_search: bool = False):
+                 block_size: int = 16,
+                 float4_e2m1_max: float = 6.0,
+                 float8_e4m3_max: float = 448.0,
+                 global_sf_max: float = 256*6,
+                 dequant_dtype: torch.dtype = torch.float32):
         super().__init__()
         self.block_size = block_size
         self.float4_e2m1_max = torch.tensor(float4_e2m1_max, dtype=dequant_dtype)
         self.float8_e4m3_max = torch.tensor(float8_e4m3_max, dtype=dequant_dtype)
-        self.global_sf = torch.tensor(global_sf, dtype=dequant_dtype)
+        self.global_sf_max = torch.tensor(global_sf_max, dtype=dequant_dtype)
         self.zero_tensor = torch.tensor(0.0, dtype=dequant_dtype)
         self.one_tensor = torch.tensor(1.0, dtype=dequant_dtype)
         self.dequant_dtype = dequant_dtype
-        self.use_search = use_search
+  
 
         # print(f"FP4Quantizer initialized with:")
         # print(f"block_size: {block_size}")
@@ -107,7 +106,10 @@ class FP4Quantizer(nn.Module):
     #     return q, scale.squeeze(-1)
 
 
-    def single_nvfp4_quant_dequant_fused(self, x: Tensor, global_sf: float = None, global_scale_aligned : bool = True):
+    def single_nvfp4_quant_dequant_fused(self, x: Tensor, global_scale_aligned : bool = True):
+
+
+        print("single_nvfp4_quant_dequant_fused")
         """Block-float nvFP4 PTQ (single slice)."""
         torch.cuda.empty_cache()
         x = x.to(self.dequant_dtype)
@@ -129,7 +131,7 @@ class FP4Quantizer(nn.Module):
         else:
             global_sf = torch.max(abs(x), dim=0, keepdim=True)[0].to(self.dequant_dtype)
 
-        global_sf = global_sf * self.get_reciprocal(self.float4_e2m1_max*self.float8_e4m3_max)
+        global_sf = global_sf * self.get_reciprocal(self.global_sf_max)
 
         x=x*self.get_reciprocal(global_sf)
 
@@ -186,8 +188,9 @@ class FP4Quantizer(nn.Module):
     #         result = result[:, :orig_n]
 
     #     return result
-    def single_nvfp4_qd_nosearch(self, x:Tensor, global_sf: float = None, global_scale_aligned : bool = True):
+    def single_nvfp4_qd_nosearch(self, x:Tensor, global_scale_aligned : bool = True):
 
+        print("single_nvfp4_qd_nosearch")
 
         x=x.to(torch.float32)
 
@@ -206,7 +209,7 @@ class FP4Quantizer(nn.Module):
         else:
             global_sf = torch.max(abs(x), dim=0, keepdim=True)[0].to(self.dequant_dtype)
 
-        global_sf = global_sf * self.get_reciprocal(self.float4_e2m1_max*self.float8_e4m3_max)
+        global_sf = global_sf * self.get_reciprocal(self.global_sf_max)
 
         x=x*self.get_reciprocal(global_sf)
 
@@ -240,9 +243,9 @@ class FP4Quantizer(nn.Module):
         return reconstructed_f32.to(torch.bfloat16)
 
 
-    def single_nvfp4_qd_searched(self, x:Tensor, global_sf: float = None, global_scale_aligned : bool = True):
+    def single_nvfp4_qd_searched(self, x:Tensor, global_scale_aligned : bool = True):
 
-
+        print("single_nvfp4_qd_searched")
 
         x=x.to(torch.float32)
 
@@ -261,7 +264,7 @@ class FP4Quantizer(nn.Module):
         else:
             global_sf = torch.max(abs(x), dim=0, keepdim=True)[0].to(self.dequant_dtype)
 
-        global_sf = global_sf * self.get_reciprocal(self.float4_e2m1_max*self.float8_e4m3_max)
+        global_sf = global_sf * self.get_reciprocal(self.global_sf_max)
 
         x=x*self.get_reciprocal(global_sf)
 
@@ -294,19 +297,19 @@ class FP4Quantizer(nn.Module):
 
         return reconstructed_f32.to(torch.bfloat16)
 
-    def dual_nvfp4_fake_quant(self, x: Tensor, global_sf: float = None, global_scale_aligned : bool = True):
+    def dual_nvfp4(self, x: Tensor, global_scale_aligned : bool = True, search : bool = False):
         """Return (q_hi, s_hi, q_lo, s_lo) such that
            x ≈ s_hi · q_hi + s_lo · q_lo
            Both q_hi and q_lo are nvFP4 tensors.
         """
 
-        if not self.use_search:
-            x_hi_reconstructed = self.single_nvfp4_qd_nosearch(x, global_sf, global_scale_aligned) #self.single_nvfp4_dequant(q_hi, s_hi, global_sf)
-            return x_hi_reconstructed + self.single_nvfp4_qd_nosearch(x - x_hi_reconstructed, global_sf, global_scale_aligned)
+        if not search:
+            x_hi_reconstructed = self.single_nvfp4_quant_dequant_fused(x, global_scale_aligned) #self.single_nvfp4_dequant(q_hi, s_hi, global_sf)
+            return x_hi_reconstructed + self.single_nvfp4_quant_dequant_fused(x - x_hi_reconstructed, global_scale_aligned)
 
         else:
-            x_hi_reconstructed = self.single_nvfp4_qd_searched(x, global_sf, global_scale_aligned) 
-            return x_hi_reconstructed + self.single_nvfp4_qd_searched(x - x_hi_reconstructed, global_sf, global_scale_aligned)
+            x_hi_reconstructed = self.single_nvfp4_qd_searched(x, global_scale_aligned) 
+            return x_hi_reconstructed + self.single_nvfp4_qd_searched(x - x_hi_reconstructed, global_scale_aligned)
 
         
     # def dual_nvfp4_fake_quant(self, x: Tensor, global_sf: float = None):
@@ -323,11 +326,11 @@ class FP4Quantizer(nn.Module):
     #     xd = xh + xl
 
     #     return xd
-    def single_nvfp4_fake_quant(self, x: Tensor, global_sf: float = None, global_scale_aligned : bool = True):
+    def single_nvfp4(self, x: Tensor, global_scale_aligned : bool = True, search : bool = False):
 
-        if not self.use_search:
-            return self.single_nvfp4_qd_nosearch(x, global_sf, global_scale_aligned)
+        if not search:
+            return self.single_nvfp4_quant_dequant_fused(x, global_scale_aligned)
         else:
-            return self.single_nvfp4_qd_searched(x, global_sf, global_scale_aligned)
+            return self.single_nvfp4_qd_searched(x, global_scale_aligned)
 
 
