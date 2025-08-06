@@ -22,12 +22,15 @@ class FP4Quantizer(nn.Module):
                  block_size: int = 16,
                  float4_e2m1_max: float = 6.0,
                  float8_e4m3_max: float = 448.0,
-                 global_sf_max: float = 448.0*6.0):
+                 global_sf_max = 448.0*6.0):
         super().__init__()
         self.block_size = block_size
         self.float4_e2m1_max = torch.tensor(float4_e2m1_max, dtype=dequant_dtype)
         self.float8_e4m3_max = torch.tensor(float8_e4m3_max, dtype=dequant_dtype)
-        self.global_sf_max = torch.tensor(global_sf_max, dtype=dequant_dtype)
+        if global_sf_max is not None:
+            self.global_sf_max = torch.tensor(global_sf_max, dtype=dequant_dtype)
+        else:
+            self.global_sf_max = None
         self.zero_tensor = torch.tensor(0.0, dtype=dequant_dtype)
         self.one_tensor = torch.tensor(1.0, dtype=dequant_dtype)
         self.dequant_dtype = dequant_dtype
@@ -65,15 +68,16 @@ class FP4Quantizer(nn.Module):
             n = x.shape[1]
             m = x.shape[0]
         x=x.contiguous()
+  
+        if self.global_sf_max is not None:
+            if global_scale_aligned:
+                global_sf = torch.max(abs(x), dim=1, keepdim=True)[0].to(torch.float32)
+            else:
+                global_sf = torch.max(abs(x), dim=0, keepdim=True)[0].to(torch.float32)
 
-        if global_scale_aligned:
-            global_sf = torch.max(abs(x), dim=1, keepdim=True)[0].to(torch.float32)
-        else:
-            global_sf = torch.max(abs(x), dim=0, keepdim=True)[0].to(torch.float32)
+            global_sf = global_sf * self.get_reciprocal(self.global_sf_max)
 
-        global_sf = global_sf * self.get_reciprocal(self.global_sf_max)
-
-        x=x*self.get_reciprocal(global_sf)
+            x=x*self.get_reciprocal(global_sf)
 
         x = x.view(m * (n // self.block_size), self.block_size)
 
@@ -103,9 +107,13 @@ class FP4Quantizer(nn.Module):
 
         if n != n_orig or m != m_orig:
             reconstructed_f32 = reconstructed_f32[:m_orig, :n_orig]
-            global_sf = global_sf[:m_orig, :n_orig]
+            if self.global_sf_max is not None:
+                global_sf = global_sf[:m_orig, :n_orig]
 
-        return reconstructed_f32, global_sf
+        if self.global_sf_max is not None:
+            return reconstructed_f32, global_sf
+        else:
+            return reconstructed_f32, 1
 
 
 
