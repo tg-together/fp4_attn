@@ -22,17 +22,18 @@ class FP4Quantizer(nn.Module):
                  block_size: int = 16,
                  float4_e2m1_max: float = 6.0,
                  float8_e4m3_max: float = 448.0,
-                 global_sf_max = 448.0*6.0):
+                 global_sf_max = 448.0*6.0,
+                 device: torch.device = torch.device("cpu")):
         super().__init__()
         self.block_size = block_size
-        self.float4_e2m1_max = torch.tensor(float4_e2m1_max, dtype=dequant_dtype)
-        self.float8_e4m3_max = torch.tensor(float8_e4m3_max, dtype=dequant_dtype)
+        self.float4_e2m1_max = torch.tensor(float4_e2m1_max, dtype=dequant_dtype, device=device)
+        self.float8_e4m3_max = torch.tensor(float8_e4m3_max, dtype=dequant_dtype, device=device)
         if global_sf_max is not None:
-            self.global_sf_max = torch.tensor(global_sf_max, dtype=dequant_dtype)
+            self.global_sf_max = torch.tensor(global_sf_max, dtype=dequant_dtype, device=device)
         else:
             self.global_sf_max = None
-        self.zero_tensor = torch.tensor(0.0, dtype=dequant_dtype)
-        self.one_tensor = torch.tensor(1.0, dtype=dequant_dtype)
+        self.zero_tensor = torch.tensor(0.0, dtype=dequant_dtype, device=device)
+        self.one_tensor = torch.tensor(1.0, dtype=dequant_dtype, device=device)
         self.dequant_dtype = dequant_dtype
 
         # print(f"FP4Quantizer initialized with:")
@@ -52,16 +53,37 @@ class FP4Quantizer(nn.Module):
             raise TypeError("Input must be a torch.Tensor.")
 
 
-    def single_nvfp4(self, x:Tensor, global_scale_aligned : bool = True, search: bool = False):
+    def single_nvfp4(self, x:Tensor, search: bool = False, transpose: bool = False):
 
-
+        #input should be of shape T, H, D
         x=x.to(torch.float32)
+        _reshaped=False
+
+        if self.global_sf_max is not None:
+
+            if x.dim() == 3:
+                global_sf = torch.max(abs(x), dim=2, keepdim=True)[0].to(torch.float32)
+            elif x.dim() == 2:
+                global_sf = torch.max(abs(x), dim=1, keepdim=True)[0].to(torch.float32)
+
+           
+            global_sf = global_sf * self.get_reciprocal(self.global_sf_max)
+
+            x=x*self.get_reciprocal(global_sf)
+
+        if x.dim() == 3:
+            T, H, D = x.shape
+            x=x.reshape(T,H*D)
+            _reshaped=True
+
+        if transpose:
+            x=x.T
 
         m_orig, n_orig = x.shape
         m=m_orig
         n=n_orig
         pad_cols = (self.block_size - n_orig % self.block_size) % self.block_size
-        pad_rows = m_orig % 2  # Will be 1 if odd, 0 if even
+        pad_rows = m_orig % 2 
 
         if pad_cols != 0 or pad_rows != 0:
             x = torch.nn.functional.pad(x, (0, pad_cols, 0, pad_rows), value=0.0)
@@ -69,15 +91,7 @@ class FP4Quantizer(nn.Module):
             m = x.shape[0]
         x=x.contiguous()
   
-        if self.global_sf_max is not None:
-            if global_scale_aligned:
-                global_sf = torch.max(abs(x), dim=1, keepdim=True)[0].to(torch.float32)
-            else:
-                global_sf = torch.max(abs(x), dim=0, keepdim=True)[0].to(torch.float32)
 
-            global_sf = global_sf * self.get_reciprocal(self.global_sf_max)
-
-            x=x*self.get_reciprocal(global_sf)
 
         x = x.view(m * (n // self.block_size), self.block_size)
 
@@ -107,23 +121,30 @@ class FP4Quantizer(nn.Module):
 
         if n != n_orig or m != m_orig:
             reconstructed_f32 = reconstructed_f32[:m_orig, :n_orig]
-            if self.global_sf_max is not None:
-                global_sf = global_sf[:m_orig, :n_orig]
+
+        if transpose:
+            reconstructed_f32 = reconstructed_f32.T
+
+
+        
+        if _reshaped:
+            reconstructed_f32 = reconstructed_f32.reshape(T, H, D)
+
 
         if self.global_sf_max is not None:
             return reconstructed_f32, global_sf
         else:
-            return reconstructed_f32, 1
+            return reconstructed_f32, self.one_tensor
 
 
 
-    def dual_nvfp4(self, x:Tensor, global_scale_aligned : bool = True, search: bool = False):
+    def dual_nvfp4(self, x:Tensor, search: bool = False, transpose: bool = False):
 
 
 
-        x_hi_q, scales_hi = self.single_nvfp4(x, global_scale_aligned, search) #self.single_nvfp4_dequant(q_hi, s_hi, global_sf)
+        x_hi_q, scales_hi = self.single_nvfp4(x, search, transpose) #self.single_nvfp4_dequant(q_hi, s_hi, global_sf)
 
-        x_lo_q, scales_lo = self.single_nvfp4(x - x_hi_q*scales_hi, global_scale_aligned, search)
+        x_lo_q, scales_lo = self.single_nvfp4(x - x_hi_q*scales_hi, search, transpose)
 
         return x_hi_q, x_lo_q, scales_hi, scales_lo
 

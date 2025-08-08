@@ -53,6 +53,139 @@ except ImportError:
         
 
 #         print(f"MSE_{tag}:{k_mse.min().item()},{k_mse.max().item()},{k_mse.mean().item()}")
+
+def quantize_q(module, q_orig, dual=True, search=True, permute=False, zero_point=False):
+
+    B, H_q, T, D = q_orig.shape
+
+    q_ = q_orig
+    sorted_mean=torch.zeros(H_q,D).to(q_orig.device)
+    perm=None
+
+    mean_q = q_orig.mean(dim=(0, 2))  # torch.amin(q.abs(), dim = (0,2))
+
+    if permute:
+        mean_q, perm = torch.sort(mean_q, dim=1)
+        for h in range(H_q):
+            q_[:, h, :, :] = q_orig[:, h, :, :][:, :, perm[h]]
+    
+
+    if zero_point:
+        sorted_mean=mean_q
+        q_ = q_ - sorted_mean[None, :, None, :]
+
+    q_=q_.permute(0, 2, 1, 3)
+
+    q_=q_.reshape(B * T, H_q, D)
+
+    if dual:
+        Qq_hi, Qq_lo, Qs_hi, Qs_lo = module.fp4_quantizer.dual_nvfp4(q_, search=search)
+    else:
+        Qq_hi, Qs_hi = module.fp4_quantizer.single_nvfp4(q_, search=search)
+        Qq_lo = torch.zeros_like(Qq_hi)
+        Qs_lo = torch.zeros_like(Qs_hi)
+
+    Qq_hi=Qq_hi.reshape(B, T, H_q, D).permute(0, 2, 1, 3)
+    Qq_lo = Qq_lo.reshape(B, T, H_q, D).permute(0, 2, 1, 3)
+    Qs_hi = Qs_hi.reshape(B, T, H_q, 1).permute(0, 2, 1, 3)
+    Qs_lo = Qs_lo.reshape(B, T, H_q, 1).permute(0, 2, 1, 3)
+
+
+    sorted_mean=sorted_mean[None, :, None, :]
+
+
+    return Qq_hi, Qq_lo, Qs_hi, Qs_lo, sorted_mean, perm
+
+
+def quantize_k(module, k_orig, perm=None, dual=False, search=True, permute=False, zero_point=False):
+
+    # k_orig=repeat_kv(k_orig, module.num_key_value_groups)
+
+    B, H_k, T, D = k_orig.shape
+
+    k_ = k_orig
+    sorted_mean=torch.zeros(H_k,D).to(k_orig.device)
+
+
+    mean_k = k_orig.mean(dim=(0, 2))  # torch.amin(q.abs(), dim = (0,2))
+
+    if permute:
+        mean_k, _ = torch.sort(mean_k, dim=1)
+        for h in range(H_k):
+            k_[:, h, :, :] = k_orig[:, h, :, :][:, :, perm[h]]
+
+    if zero_point:
+        sorted_mean=mean_k
+        k_ = k_ - sorted_mean[None, :, None, :]
+
+    k_=k_.permute(0, 2, 1, 3)
+
+    k_=k_.reshape(B * T, H_k, D)
+
+    if dual:
+        Kq_hi, Kq_lo, Ks_hi, Ks_lo = module.fp4_quantizer.dual_nvfp4(k_, search=search)
+    else:
+        Kq_hi, Ks_hi = module.fp4_quantizer.single_nvfp4(k_, search=search)
+        Kq_lo = torch.zeros_like(Kq_hi)
+        Ks_lo = torch.zeros_like(Ks_hi)
+
+    Kq_hi=Kq_hi.reshape(B, T, H_k, D).permute(0, 2, 1, 3)
+    Kq_lo = Kq_lo.reshape(B, T, H_k, D).permute(0, 2, 1, 3)
+    Ks_hi = Ks_hi.reshape(B, T, H_k, 1).permute(0, 2, 1, 3)
+    Ks_lo = Ks_lo.reshape(B, T, H_k, 1).permute(0, 2, 1, 3)
+
+
+    sorted_mean=sorted_mean[None, :, None, :]
+
+
+    return Kq_hi, Ks_hi, sorted_mean
+
+
+def quantize_v(module, v_orig, dual=False, search=True, permute=False, zero_point=False):
+
+    B, H_v, T, D = v_orig.shape
+
+    v_ = v_orig
+    sorted_mean=torch.zeros(H_v,D).to(v_orig.device)
+
+
+    mean_v = v_orig.mean(dim=(0, 2))  # torch.amin(q.abs(), dim = (0,2))
+
+    if permute:
+        mean_v, perm = torch.sort(mean_v, dim=1)
+        inv_perm = torch.argsort(perm, dim=1) 
+        for h in range(H_v):
+            v_[:, h, :, :] = v_orig[:, h, :, :][:, :, perm[h]]
+
+    if zero_point:
+        sorted_mean=mean_v
+        v_ = v_ - sorted_mean[None, :, None, :]
+
+    v_=v_.permute(0, 2, 1, 3)
+
+    v_=v_.reshape(B * T, H_v, D)
+
+    if dual:
+        Vq_hi, Vq_lo, Vs_hi, Vs_lo = module.fp4_quantizer.dual_nvfp4(v_, search=search, transpose=True)
+    else:
+        Vq_hi, Vs_hi = module.fp4_quantizer.single_nvfp4(v_, search=search, transpose=True)
+        Vq_lo = torch.zeros_like(Vq_hi)
+        Vs_lo = torch.zeros_like(Vs_hi)
+
+    Vq_hi=Vq_hi.reshape(B, T, H_v, D).permute(0, 2, 1, 3)
+    Vq_lo = Vq_lo.reshape(B, T, H_v, D).permute(0, 2, 1, 3)
+    Vs_hi = Vs_hi.reshape(B, T, H_v, 1).permute(0, 2, 1, 3)
+    Vs_lo = Vs_lo.reshape(B, T, H_v, 1).permute(0, 2, 1, 3)
+
+
+    sorted_mean=sorted_mean[None, :, None, :]
+
+
+    return Vq_hi, Vs_hi, sorted_mean
+
+
+
+
 def eager_attention_forward(
     module: nn.Module,
     query: torch.Tensor,
@@ -66,7 +199,11 @@ def eager_attention_forward(
     key_states = repeat_kv(key, module.num_key_value_groups)
     value_states = repeat_kv(value, module.num_key_value_groups)
 
-    attn_weights = torch.matmul(query, key_states.transpose(2, 3)) * scaling
+    attn_weights = torch.matmul(query, key_states.transpose(2, 3)) 
+
+
+    print(attn_weights[0,0,0,:])
+    raise
     if attention_mask is not None:
         causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
         attn_weights = attn_weights + causal_mask
@@ -96,7 +233,6 @@ def eager_attention_forward_quantized(
 ):
 
 
-    Kq=repeat_kv(Kq, module.num_key_value_groups)
     Vq=repeat_kv(Vq, module.num_key_value_groups)
 
 
@@ -162,7 +298,7 @@ def llama_fp4_attention_forward(
 ) -> tuple[torch.Tensor, Optional[torch.Tensor], Optional[tuple[torch.Tensor]]]:
 
     
-    device= self.q_proj.weight.device
+    
     # Initialize FP4Quantizer if not already present
     if not hasattr(self, 'fp4_quantizer'):
         # Infer dtype from q_proj weight
@@ -174,12 +310,12 @@ def llama_fp4_attention_forward(
         self.use_dual_quant_attn = os.getenv('FP4_USE_DUAL_QUANT_ATTN', 'true').lower() == 'true'
         
         # Initialize FP4Quantizer with appropriate parameters
-        self.fp4_quantizer = FP4Quantizer(global_sf_max=1536)
-        self.fp4_quantizer.float4_e2m1_max = self.fp4_quantizer.float4_e2m1_max.to(device)
-        self.fp4_quantizer.float8_e4m3_max = self.fp4_quantizer.float8_e4m3_max.to(device)
-        self.fp4_quantizer.global_sf_max = self.fp4_quantizer.global_sf_max.to(device)
-        self.fp4_quantizer.zero_tensor = self.fp4_quantizer.zero_tensor.to(device)
-        self.fp4_quantizer.one_tensor = self.fp4_quantizer.one_tensor.to(device)
+        self.fp4_quantizer = FP4Quantizer(global_sf_max=1536, device=self.q_proj.weight.device)
+
+        self.average_q_error=0
+        self.average_k_error=0
+        self.average_v_error=0
+
 
     
     input_shape = hidden_states.shape[:-1]
@@ -192,110 +328,33 @@ def llama_fp4_attention_forward(
     B, H_q, T, D = query_states.shape  
     _, H_kv, _, _ = key_states.shape    
 
-    # Reshape to 2D: [B * T, H * D]
-
-
-
     cos, sin = position_embeddings
 
     query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
     
-    
-    # Check if we need to reshape (for quantization or visualization)
-    needs_reshape = ((hasattr(llama_fp4_attention_forward, 'quantize_enabled') and llama_fp4_attention_forward.quantize_enabled) or 
-                     (hasattr(llama_fp4_attention_forward, 'visualize') and llama_fp4_attention_forward.visualize))
-    
-    if needs_reshape:
-
-        # Reshape to 2D for quantization/visualization
-        q2d = query_states.permute(0, 2, 1, 3).reshape(B * T, H_q * D)
-        k2d = key_states.permute(0, 2, 1, 3).reshape(B * T, H_kv * D)
-        v2d = value_states.permute(0, 2, 1, 3).reshape(B * T, H_kv * D)
-
-        # q_mean=torch.mean(q2d,dim=0,keepdim=True)
-        # k_mean=torch.mean(k2d,dim=0,keepdim=True)
-        # v_mean=torch.mean(v2d,dim=0,keepdim=True)
-
-        # q_mean=torch.zeros_like(q2d)
-        # k_mean=torch.zeros_like(k2d)
-        # v_mean=torch.zeros_like(v2d)
-
-        # q2d=q2d-q_mean
-        # k2d=k2d-k_mean
-        # v2d=v2d-v_mean
+    if hasattr(llama_fp4_attention_forward, 'visualize') and llama_fp4_attention_forward.visualize:
+        collect_qkv(query_states, key_states, value_states, self.layer_idx)
+    # Check if quantization is enabled
+    if hasattr(llama_fp4_attention_forward, 'quantize_enabled') and llama_fp4_attention_forward.quantize_enabled:
 
         
-        if hasattr(llama_fp4_attention_forward, 'visualize') and llama_fp4_attention_forward.visualize:
-            collect_qkv(q2d, k2d, v2d, self.layer_idx)
-        # Check if quantization is enabled
-        if hasattr(llama_fp4_attention_forward, 'quantize_enabled') and llama_fp4_attention_forward.quantize_enabled:
-
-            
-            # Get environment variable for query quantization method
-            
-
-            # start_time = time.time_ns()
-            # Apply quantization
-            if self.use_dual_quant_q:
+        Qq_hi, Qq_lo, Qs_hi, Qs_lo, Q_mean, perm = quantize_q(self, query_states, self.use_dual_quant_q, self.use_search)
+        Kq, Ks, K_mean = quantize_k(self, key_states, perm, search=self.use_search)
+        Vq, Vs, V_mean = quantize_v(self, value_states, search=self.use_search)
 
 
-                
-                Qq_hi, Qq_lo, Qs_hi, Qs_lo = self.fp4_quantizer.dual_nvfp4(q2d, search=self.use_search)
+    # if past_key_value is not None:
+    #     # sin and cos are specific to RoPE models; cache_position needed for the static cache
+    #     cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
+    #     key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+    self.average_q_error+=torch.mean((query_states-Qq_hi*Qs_hi-Qq_lo*Qs_lo-Q_mean)**2)
+    self.average_k_error+=torch.mean((key_states-Kq*Ks-K_mean)**2)
+    self.average_v_error+=torch.mean((value_states-Vq*Vs-V_mean)**2)
 
-                Qq_hi = Qq_hi.reshape(B, T, H_q, D).permute(0, 2, 1, 3)
-                Qq_lo = Qq_lo.reshape(B, T, H_q, D).permute(0, 2, 1, 3)
-                Qs_hi = Qs_hi.reshape(B, T, 1, 1).permute(0, 2, 1, 3)
-                Qs_lo = Qs_lo.reshape(B, T, 1, 1).permute(0, 2, 1, 3)
-                # q_mean=q_mean.reshape(1, 1, H_q, D).permute(0, 2, 1, 3)
+    query_states=Qq_hi*Qs_hi+Qq_lo*Qs_lo+Q_mean
+    key_states=Kq*Ks+K_mean
+    value_states=Vq*Vs+V_mean
 
-                
-            else:
-
-                Qq_hi, Qs_hi = self.fp4_quantizer.single_nvfp4(q2d, search=self.use_search)
-                Qq_hi = Qq_hi.reshape(B, T, H_q, D).permute(0, 2, 1, 3)
-                Qs_hi = Qs_hi.reshape(B, T, 1, 1).permute(0, 2, 1, 3)
-                Qq_lo = torch.zeros_like(Qq_hi)
-                Qs_lo = torch.zeros_like(Qs_hi)
-                # q_mean=q_mean.reshape(1, 1, H_q, D).permute(0, 2, 1, 3)
-
-
-  
-
-            Kq,Ks = self.fp4_quantizer.single_nvfp4(k2d, search=self.use_search)
-            Kq = Kq.reshape(B, T, H_kv, D).permute(0, 2, 1, 3)
-            Ks = Ks.reshape(B, T, 1, 1).permute(0, 2, 1, 3)
-            # k_mean=k_mean.reshape(1, 1, H_kv, D).permute(0, 2, 1, 3)
-
-            
-            Vq,Vs = self.fp4_quantizer.single_nvfp4(v2d.T, global_scale_aligned=False, search=self.use_search)
-            Vq=Vq.T
-            Vs=Vs.T
-            Vq = Vq.reshape(B, T, H_kv, D).permute(0, 2, 1, 3)
-            Vs = Vs.reshape(B, T, 1, 1).permute(0, 2, 1, 3)
-            # v_mean=v_mean.reshape(1, 1, H_kv, D).permute(0, 2, 1, 3)
-
-            if hasattr(llama_fp4_attention_forward, 'visualize') and llama_fp4_attention_forward.visualize:
-                collect_qkv_diff((Qq_hi*Qs_hi + Qq_lo*Qs_lo).permute(0, 2, 1, 3).reshape(B * T, H_q * D), (Kq*Ks).permute(0, 2, 1, 3).reshape(B * T, H_kv * D) , (Vq*Vs).permute(0, 2, 1, 3).reshape(B * T, H_kv * D) , q2d, k2d, v2d, self.layer_idx)
-            
-
-
-            # query_states = (Qq_hi*Qs_hi + Qq_lo*Qs_lo) 
-            key_states = (Kq*Ks) 
-            value_states = (Vq*Vs) 
-
-            # Collect differences if visualizing
-
-
-
-        # Reshape back to 4D
-
-
-    
-
-    if past_key_value is not None:
-        # sin and cos are specific to RoPE models; cache_position needed for the static cache
-        cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
-        key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
     attention_interface: Callable = eager_attention_forward
 
@@ -314,42 +373,46 @@ def llama_fp4_attention_forward(
         print("Q nan:", torch.isnan(query_states).any())
         raise
 
-    if hasattr(llama_fp4_attention_forward, 'quantize_enabled') and llama_fp4_attention_forward.quantize_enabled:
+    # if hasattr(llama_fp4_attention_forward, 'quantize_enabled') and llama_fp4_attention_forward.quantize_enabled:
 
 
-        attn_output, attn_weights = eager_attention_forward_quantized(
-            self,
-            Qq_hi,
-            Qq_lo,
-            Qs_hi,
-            Qs_lo,
-            Kq,
-            Ks,
-            Vq,
-            Vs,
-            attention_mask,
-            dropout=0.0 if not self.training else self.attention_dropout,
-            scaling=self.scaling,
-            **kwargs,
-        )
+    #     attn_output, attn_weights = eager_attention_forward_quantized(
+    #         self,
+    #         Qq_hi,
+    #         Qq_lo,
+    #         Qs_hi,
+    #         Qs_lo,
+    #         Kq,
+    #         Ks,
+    #         Vq,
+    #         Vs,
+    #         attention_mask,
+    #         dropout=0.0 if not self.training else self.attention_dropout,
+    #         scaling=self.scaling,
+    #         **kwargs,
+    #     )
 
-    else:
+    # else:
 
 
-        attn_output, attn_weights = eager_attention_forward(
-            self,
-            query_states,
-            key_states,
-            value_states,
-            attention_mask,
-            dropout=0.0 if not self.training else self.attention_dropout,
-            scaling=self.scaling,
-            **kwargs,
-        )
+    attn_output, attn_weights = eager_attention_forward(
+        self,
+        query_states,
+        key_states,
+        value_states,
+        attention_mask,
+        dropout=0.0 if not self.training else self.attention_dropout,
+        scaling=self.scaling,
+        **kwargs,
+    )
 
     # print(torch.mean((attn_output_ref-attn_output)**2))
     # print(torch.mean((attn_weights_ref-attn_weights)**2))
     # raise
+    # print(f"Average Q Error in layer {self.layer_idx}: {self.average_q_error}")
+    # print(f"Average K Error in layer {self.layer_idx}: {self.average_k_error}")
+    # print(f"Average V Error in layer {self.layer_idx}: {self.average_v_error}")
+
 
     attn_output = attn_output.reshape(*input_shape, -1).contiguous()
     attn_output = self.o_proj(attn_output)
