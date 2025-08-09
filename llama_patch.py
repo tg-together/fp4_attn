@@ -141,7 +141,7 @@ def quantize_k(module, k_orig, perm=None, dual=False, search=True, permute=False
     return Kq_hi, Ks_hi, sorted_mean
 
 
-def quantize_v(module, v_orig, dual=False, search=True, permute=False, zero_point=False):
+def quantize_v(module, v_orig, dual=False, search=True, permute=False, zero_point=True):
 
     B, H_v, T, D = v_orig.shape
 
@@ -199,11 +199,7 @@ def eager_attention_forward(
     key_states = repeat_kv(key, module.num_key_value_groups)
     value_states = repeat_kv(value, module.num_key_value_groups)
 
-    attn_weights = torch.matmul(query, key_states.transpose(2, 3)) 
-
-
-    print(attn_weights[0,0,0,:])
-    raise
+    attn_weights = torch.matmul(query, key_states.transpose(2, 3)) * scaling
     if attention_mask is not None:
         causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
         attn_weights = attn_weights + causal_mask
@@ -312,10 +308,6 @@ def llama_fp4_attention_forward(
         # Initialize FP4Quantizer with appropriate parameters
         self.fp4_quantizer = FP4Quantizer(global_sf_max=1536, device=self.q_proj.weight.device)
 
-        self.average_q_error=0
-        self.average_k_error=0
-        self.average_v_error=0
-
 
     
     input_shape = hidden_states.shape[:-1]
@@ -332,6 +324,7 @@ def llama_fp4_attention_forward(
 
     query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
     
+
     if hasattr(llama_fp4_attention_forward, 'visualize') and llama_fp4_attention_forward.visualize:
         collect_qkv(query_states, key_states, value_states, self.layer_idx)
     # Check if quantization is enabled
@@ -340,16 +333,13 @@ def llama_fp4_attention_forward(
         
         Qq_hi, Qq_lo, Qs_hi, Qs_lo, Q_mean, perm = quantize_q(self, query_states, self.use_dual_quant_q, self.use_search)
         Kq, Ks, K_mean = quantize_k(self, key_states, perm, search=self.use_search)
-        Vq, Vs, V_mean = quantize_v(self, value_states, search=self.use_search)
+        Vq, Vs, V_mean = quantize_v(self, value_states,search=self.use_search)
 
 
     # if past_key_value is not None:
     #     # sin and cos are specific to RoPE models; cache_position needed for the static cache
     #     cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
     #     key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
-    self.average_q_error+=torch.mean((query_states-Qq_hi*Qs_hi-Qq_lo*Qs_lo-Q_mean)**2)
-    self.average_k_error+=torch.mean((key_states-Kq*Ks-K_mean)**2)
-    self.average_v_error+=torch.mean((value_states-Vq*Vs-V_mean)**2)
 
     query_states=Qq_hi*Qs_hi+Qq_lo*Qs_lo+Q_mean
     key_states=Kq*Ks+K_mean
@@ -397,9 +387,9 @@ def llama_fp4_attention_forward(
 
     attn_output, attn_weights = eager_attention_forward(
         self,
-        query_states,
-        key_states,
-        value_states,
+        query_states.to(torch.bfloat16),
+        key_states.to(torch.bfloat16),
+        value_states.to(torch.bfloat16),
         attention_mask,
         dropout=0.0 if not self.training else self.attention_dropout,
         scaling=self.scaling,
@@ -409,10 +399,6 @@ def llama_fp4_attention_forward(
     # print(torch.mean((attn_output_ref-attn_output)**2))
     # print(torch.mean((attn_weights_ref-attn_weights)**2))
     # raise
-    # print(f"Average Q Error in layer {self.layer_idx}: {self.average_q_error}")
-    # print(f"Average K Error in layer {self.layer_idx}: {self.average_k_error}")
-    # print(f"Average V Error in layer {self.layer_idx}: {self.average_v_error}")
-
 
     attn_output = attn_output.reshape(*input_shape, -1).contiguous()
     attn_output = self.o_proj(attn_output)
