@@ -54,7 +54,7 @@ except ImportError:
 
 #         print(f"MSE_{tag}:{k_mse.min().item()},{k_mse.max().item()},{k_mse.mean().item()}")
 
-def quantize_q(module, q_orig, dual=True, search=True, permute=True, zero_point=False):
+def quantize_q(module, q_orig, dual=True, search=True, permute=False, zero_point=False):
 
     B, H_q, T, D = q_orig.shape
 
@@ -100,9 +100,10 @@ def quantize_q(module, q_orig, dual=True, search=True, permute=True, zero_point=
     return Qq_hi, Qq_lo, Qs_hi, Qs_lo, sorted_mean, perm
 
 
-def quantize_k(module, k_orig, perm=None, dual=False, search=True, permute=True, zero_point=False):
+def quantize_k(module, k_orig, perm=None, dual=False, search=True, permute=False, zero_point=False):
 
-    # k_orig=repeat_kv(k_orig, module.num_key_value_groups)
+    if permute:
+        k_orig=repeat_kv(k_orig, module.num_key_value_groups)
 
     B, H_k, T, D = k_orig.shape
 
@@ -113,6 +114,7 @@ def quantize_k(module, k_orig, perm=None, dual=False, search=True, permute=True,
     mean_k = k_orig.mean(dim=(0, 2))  # torch.amin(q.abs(), dim = (0,2))
 
     if permute:
+        
         mean_k, _ = torch.sort(mean_k, dim=1)
         for h in range(H_k):
             k_[:, h, :, :] = k_orig[:, h, :, :][:, :, perm[h]]
@@ -151,7 +153,7 @@ def quantize_v(module, v_orig, dual=False, search=True, permute=False, zero_poin
 
 
     v_ = v_orig
-    sorted_mean=torch.zeros(H_v,D).to(v_orig.device)
+    sorted_mean=torch.zeros(B,T).to(v_orig.device)
 
 
     mean_v = v_orig.mean(dim=(1, 3))  # torch.amin(q.abs(), dim = (0,2))
@@ -166,7 +168,7 @@ def quantize_v(module, v_orig, dual=False, search=True, permute=False, zero_poin
     if zero_point:
   
         sorted_mean=mean_v
-        v_ = v_ - sorted_mean[None, :, None, :]
+        v_ = v_ - sorted_mean[:,None,:, None]
 
     v_=v_.permute(0, 2, 1, 3)
 
@@ -188,7 +190,7 @@ def quantize_v(module, v_orig, dual=False, search=True, permute=False, zero_poin
     Vs_lo = Vs_lo.reshape(B, T, H_v, 1).permute(0, 2, 1, 3)
 
 
-    sorted_mean=sorted_mean[None, :, None, :]
+    sorted_mean=sorted_mean[:,None,:, None]
 
  
     return Vq_hi, Vs_hi, sorted_mean
@@ -240,8 +242,10 @@ def eager_attention_forward_quantized(
     **kwargs: Unpack[TransformersKwargs],
 ):
 
-
+    Kq=repeat_kv(Kq, module.num_key_value_groups)
+    Ks=repeat_kv(Ks, module.num_key_value_groups)
     Vq=repeat_kv(Vq, module.num_key_value_groups)
+    Vs=repeat_kv(Vs, module.num_key_value_groups)
 
 
 
@@ -375,37 +379,37 @@ def llama_fp4_attention_forward(
         print("Q nan:", torch.isnan(query_states).any())
         raise
 
-    # if hasattr(llama_fp4_attention_forward, 'quantize_enabled') and llama_fp4_attention_forward.quantize_enabled:
+    if hasattr(llama_fp4_attention_forward, 'quantize_enabled') and llama_fp4_attention_forward.quantize_enabled:
 
 
-    #     attn_output, attn_weights = eager_attention_forward_quantized(
-    #         self,
-    #         Qq_hi,
-    #         Qq_lo,
-    #         Qs_hi,
-    #         Qs_lo,
-    #         Kq,
-    #         Ks,
-    #         Vq,
-    #         Vs,
-    #         attention_mask,
-    #         dropout=0.0 if not self.training else self.attention_dropout,
-    #         scaling=self.scaling,
-    #         **kwargs,
-    #     )
+        attn_output, attn_weights = eager_attention_forward_quantized(
+            self,
+            Qq_hi,
+            Qq_lo,
+            Qs_hi,
+            Qs_lo,
+            Kq,
+            Ks,
+            Vq,
+            Vs,
+            attention_mask,
+            dropout=0.0 if not self.training else self.attention_dropout,
+            scaling=self.scaling,
+            **kwargs,
+        )
 
-    # else:
+    else:
     
-    attn_output, attn_weights = eager_attention_forward(
-        self,
-        query_states.to(torch.bfloat16),
-        key_states.to(torch.bfloat16),
-        value_states.to(torch.bfloat16),
-        attention_mask,
-        dropout=0.0 if not self.training else self.attention_dropout,
-        scaling=self.scaling,
-        **kwargs,
-    )
+        attn_output, attn_weights = eager_attention_forward(
+            self,
+            query_states.to(torch.bfloat16),
+            key_states.to(torch.bfloat16),
+            value_states.to(torch.bfloat16),
+            attention_mask,
+            dropout=0.0 if not self.training else self.attention_dropout,
+            scaling=self.scaling,
+            **kwargs,
+        )
 
     # print(torch.mean((attn_output_ref-attn_output)**2))
     # print(torch.mean((attn_weights_ref-attn_weights)**2))
