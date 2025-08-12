@@ -54,7 +54,7 @@ except ImportError:
 
 #         print(f"MSE_{tag}:{k_mse.min().item()},{k_mse.max().item()},{k_mse.mean().item()}")
 
-def quantize_q(module, q_orig, dual=True, search=True, permute=False, zero_point=False):
+def quantize_q(module, q_orig, dual=True, search=True, permute=True, zero_point=False):
 
     B, H_q, T, D = q_orig.shape
 
@@ -87,17 +87,20 @@ def quantize_q(module, q_orig, dual=True, search=True, permute=False, zero_point
 
     Qq_hi=Qq_hi.reshape(B, T, H_q, D).permute(0, 2, 1, 3)
     Qq_lo = Qq_lo.reshape(B, T, H_q, D).permute(0, 2, 1, 3)
-    Qs_hi = Qs_hi.reshape(B, T, H_q, 1).permute(0, 2, 1, 3)
-    Qs_lo = Qs_lo.reshape(B, T, H_q, 1).permute(0, 2, 1, 3)
+
+    if module.fp4_quantizer.global_sf_max is not None:
+        Qs_hi = Qs_hi.reshape(B, T, H_q, 1).permute(0, 2, 1, 3)
+        Qs_lo = Qs_lo.reshape(B, T, H_q, 1).permute(0, 2, 1, 3)
 
 
     sorted_mean=sorted_mean[None, :, None, :]
 
+    
 
     return Qq_hi, Qq_lo, Qs_hi, Qs_lo, sorted_mean, perm
 
 
-def quantize_k(module, k_orig, perm=None, dual=False, search=True, permute=False, zero_point=False):
+def quantize_k(module, k_orig, perm=None, dual=False, search=True, permute=True, zero_point=False):
 
     # k_orig=repeat_kv(k_orig, module.num_key_value_groups)
 
@@ -138,26 +141,30 @@ def quantize_k(module, k_orig, perm=None, dual=False, search=True, permute=False
     sorted_mean=sorted_mean[None, :, None, :]
 
 
+
     return Kq_hi, Ks_hi, sorted_mean
 
 
-def quantize_v(module, v_orig, dual=False, search=True, permute=False, zero_point=True):
+def quantize_v(module, v_orig, dual=False, search=True, permute=False, zero_point=False):
 
     B, H_v, T, D = v_orig.shape
+
 
     v_ = v_orig
     sorted_mean=torch.zeros(H_v,D).to(v_orig.device)
 
 
-    mean_v = v_orig.mean(dim=(0, 2))  # torch.amin(q.abs(), dim = (0,2))
+    mean_v = v_orig.mean(dim=(1, 3))  # torch.amin(q.abs(), dim = (0,2))
 
     if permute:
+   
         mean_v, perm = torch.sort(mean_v, dim=1)
         inv_perm = torch.argsort(perm, dim=1) 
         for h in range(H_v):
             v_[:, h, :, :] = v_orig[:, h, :, :][:, :, perm[h]]
 
     if zero_point:
+  
         sorted_mean=mean_v
         v_ = v_ - sorted_mean[None, :, None, :]
 
@@ -165,9 +172,12 @@ def quantize_v(module, v_orig, dual=False, search=True, permute=False, zero_poin
 
     v_=v_.reshape(B * T, H_v, D)
 
+
+
     if dual:
         Vq_hi, Vq_lo, Vs_hi, Vs_lo = module.fp4_quantizer.dual_nvfp4(v_, search=search, transpose=True)
     else:
+
         Vq_hi, Vs_hi = module.fp4_quantizer.single_nvfp4(v_, search=search, transpose=True)
         Vq_lo = torch.zeros_like(Vq_hi)
         Vs_lo = torch.zeros_like(Vs_hi)
@@ -180,7 +190,7 @@ def quantize_v(module, v_orig, dual=False, search=True, permute=False, zero_poin
 
     sorted_mean=sorted_mean[None, :, None, :]
 
-
+ 
     return Vq_hi, Vs_hi, sorted_mean
 
 
@@ -203,6 +213,8 @@ def eager_attention_forward(
     if attention_mask is not None:
         causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
         attn_weights = attn_weights + causal_mask
+
+
 
     attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
     attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
@@ -323,7 +335,7 @@ def llama_fp4_attention_forward(
     cos, sin = position_embeddings
 
     query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
-    
+
 
     if hasattr(llama_fp4_attention_forward, 'visualize') and llama_fp4_attention_forward.visualize:
         collect_qkv(query_states, key_states, value_states, self.layer_idx)
@@ -341,9 +353,9 @@ def llama_fp4_attention_forward(
     #     cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
     #     key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
-    query_states=Qq_hi*Qs_hi+Qq_lo*Qs_lo+Q_mean
-    key_states=Kq*Ks+K_mean
-    value_states=Vq*Vs+V_mean
+        query_states=Qq_hi*Qs_hi+Qq_lo*Qs_lo+Q_mean
+        key_states=Kq*Ks+K_mean
+        value_states=Vq*Vs+V_mean
 
 
     attention_interface: Callable = eager_attention_forward
@@ -383,8 +395,7 @@ def llama_fp4_attention_forward(
     #     )
 
     # else:
-
-
+    
     attn_output, attn_weights = eager_attention_forward(
         self,
         query_states.to(torch.bfloat16),

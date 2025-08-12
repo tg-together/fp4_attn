@@ -134,7 +134,7 @@ class FP4Quantizer(nn.Module):
         if self.global_sf_max is not None:
             return reconstructed_f32, global_sf
         else:
-            return reconstructed_f32, self.one_tensor
+            return reconstructed_f32, torch.ones(*([1] * reconstructed_f32.ndim),device=reconstructed_f32.device)
 
 
 
@@ -143,6 +143,7 @@ class FP4Quantizer(nn.Module):
 
 
         x_hi_q, scales_hi = self.single_nvfp4(x, search, transpose) #self.single_nvfp4_dequant(q_hi, s_hi, global_sf)
+        
 
         x_lo_q, scales_lo = self.single_nvfp4(x - x_hi_q*scales_hi, search, transpose)
 
