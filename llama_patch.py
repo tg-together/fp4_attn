@@ -183,7 +183,7 @@ def quantize_v(module, v_orig, dual=False, search=True, permute=False, zero_poin
     #         v_[:, h, :, :] = v_orig[:, h, :, :][:, :, perm[h]]
 
     if zero_point:
-        print("V zero_point:", zero_point)
+
         sorted_mean=zp.to(torch.float32)
         v_ = v_ - sorted_mean[:,None,:, None]
 
@@ -213,7 +213,7 @@ def quantize_v(module, v_orig, dual=False, search=True, permute=False, zero_poin
  
     return Vq_hi, Vs_hi, sorted_mean
 
-def quantize_p(module, attn_weights, vs, dual=True, search=True, with_shift=True):
+def quantize_p(module, attn_weights, dual=True, search=True, with_shift=True):
 
 
     if not with_shift:    
@@ -221,12 +221,12 @@ def quantize_p(module, attn_weights, vs, dual=True, search=True, with_shift=True
 
         attn_weights = nn.functional.dropout(attn_weights, p=module.attention_dropout, training=module.training)
 
-        attn_weights=attn_weights * vs.transpose(2, 3)
+
 
         denom = torch.ones(*([1] * attn_weights.ndim),device=attn_weights.device)
 
     else:
-        print("with_shift")
+ 
         max_val, _ = torch.max(attn_weights, dim=-1, keepdim=True)
         
         num = attn_weights - max_val + 6
@@ -237,7 +237,6 @@ def quantize_p(module, attn_weights, vs, dual=True, search=True, with_shift=True
 
         attn_weights = nn.functional.dropout(attn_weights, p=module.attention_dropout, training=module.training)
 
-        attn_weights=attn_weights * vs.transpose(2, 3)
 
     
 
@@ -281,10 +280,16 @@ def eager_attention_forward(
         causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
         attn_weights = attn_weights + causal_mask
 
+    if hasattr(module, 'quantize_P') and module.quantize_P == True:
+        Aq_hi, Aq_lo, As_hi, As_lo, denom = quantize_p(module, attn_weights, module.use_dual_quant_attn, module.use_P_search, with_shift=module.with_shift)
+        attn_weights = (Aq_hi*As_hi+Aq_lo*As_lo)/denom
+    else:
+
+        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
+        attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
 
 
-    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
-    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+
     attn_output = torch.matmul(attn_weights, value_states)
     attn_output = attn_output.transpose(1, 2).contiguous()
 
@@ -360,6 +365,15 @@ def llama_fp4_attention_forward(
         self.with_shift = os.getenv('SHIFTED_SM', 'true').lower() == 'true'
         # Initialize FP4Quantizer with appropriate parameters
         self.fp4_quantizer = FP4Quantizer(global_sf_max=1536, device=self.q_proj.weight.device)
+        # Debug: print env var-driven configuration
+        print(
+            f"FP4_USE_Q_SEARCH={self.use_Q_search}, "
+            f"FP4_USE_P_SEARCH={self.use_P_search}, "
+            f"FP4_USE_DUAL_QUANT_Q={self.use_dual_quant_q}, "
+            f"FP4_USE_DUAL_QUANT_ATTN={self.use_dual_quant_attn}, "
+            f"ZERO_POINT={self.zero_point}, "
+            f"SHIFTED_SM={self.with_shift}"
+        )
 
 
     
@@ -381,23 +395,42 @@ def llama_fp4_attention_forward(
     if hasattr(llama_fp4_attention_forward, 'visualize') and llama_fp4_attention_forward.visualize:
         collect_qkv(query_states, key_states, value_states, self.layer_idx)
     # Check if quantization is enabled
-    if hasattr(llama_fp4_attention_forward, 'quantize_enabled') and llama_fp4_attention_forward.quantize_enabled and self.layer_idx!=0:
+    # Set defaults and parse selective spec
+    self.quantize = False
+    perm = None
+    quantize_spec = None
+    if hasattr(llama_fp4_attention_forward, 'quantize_enabled'):
+        quantize_spec = llama_fp4_attention_forward.quantize_enabled
+    if self.layer_idx != 0 and quantize_spec:
 
-        
-        Qq_hi, Qq_lo, Qs_hi, Qs_lo, Q_mean, perm = quantize_q(self, query_states, self.use_dual_quant_q, self.use_Q_search, zero_point=self.zero_point)
-        Kq, Ks, K_mean = quantize_k(self, key_states, perm, search=self.use_search, zero_point=self.zero_point)
-        Vq, Vs, V_mean = quantize_v(self, value_states,search=self.use_search, zero_point=self.zero_point)
+        letters = "QKVP" if isinstance(quantize_spec, bool) and quantize_spec else str(quantize_spec).upper()
 
+        # Per-tensor toggles; P controls attention-weight quantization inside eager path
+        self.quantize_Q = ('Q' in letters)
+        self.quantize_K = ('K' in letters)
+        self.quantize_V = ('V' in letters)
+        self.quantize_P = ('P' in letters)
+
+
+        if self.quantize_Q:
+            Qq_hi, Qq_lo, Qs_hi, Qs_lo, Q_mean, perm = quantize_q(self, query_states, self.use_dual_quant_q, self.use_Q_search, zero_point=self.zero_point)
+            query_states = Qq_hi*Qs_hi + Qq_lo*Qs_lo + Q_mean
+
+        if self.quantize_K:
+            Kq, Ks, K_mean = quantize_k(self, key_states, perm, search=True, zero_point=None)
+            key_states = Kq*Ks + K_mean
+
+        if self.quantize_V:
+            Vq, Vs, V_mean = quantize_v(self, value_states, search=True, zero_point=None)
+            value_states = Vq*Vs + V_mean
 
     # if past_key_value is not None:
     #     # sin and cos are specific to RoPE models; cache_position needed for the static cache
     #     cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
     #     key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
-        # query_states=Qq_hi*Qs_hi+Qq_lo*Qs_lo+Q_mean
-        # key_states=Kq*Ks+K_mean
-        # value_states=Vq*Vs+V_mean
-
+        
+    
 
     attention_interface: Callable = eager_attention_forward
 
@@ -416,40 +449,17 @@ def llama_fp4_attention_forward(
         print("Q nan:", torch.isnan(query_states).any())
         raise
 
-    if hasattr(llama_fp4_attention_forward, 'quantize_enabled') and llama_fp4_attention_forward.quantize_enabled and self.layer_idx!=0:
 
-
-        attn_output, attn_weights = eager_attention_forward_quantized(
-            self,
-            Qq_hi,
-            Qq_lo,
-            Qs_hi,
-            Qs_lo,
-            Q_mean,            
-            Kq,
-            Ks,
-            K_mean,
-            Vq,
-            Vs,
-            V_mean,
-            attention_mask,
-            dropout=0.0 if not self.training else self.attention_dropout,
-            scaling=self.scaling,
-            **kwargs,
-        )
-
-    else:
-    
-        attn_output, attn_weights = eager_attention_forward(
-            self,
-            query_states,
-            key_states,
-            value_states,
-            attention_mask,
-            dropout=0.0 if not self.training else self.attention_dropout,
-            scaling=self.scaling,
-            **kwargs,
-        )
+    attn_output, attn_weights = eager_attention_forward(
+        self,
+        query_states,
+        key_states,
+        value_states,
+        attention_mask,
+        dropout=0.0 if not self.training else self.attention_dropout,
+        scaling=self.scaling,
+        **kwargs,
+    )
 
     # print(torch.mean((attn_output_ref-attn_output)**2))
     # print(torch.mean((attn_weights_ref-attn_weights)**2))

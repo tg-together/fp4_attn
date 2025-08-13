@@ -121,7 +121,7 @@ def parse_arguments():
     parser.add_argument("--output", help="Output JSON file")
     parser.add_argument("--num_samples", type=int, default=None, help="Number of samples to evaluate")
     parser.add_argument("--visualize", action="store_true", help="Enable QKV visualization")
-    parser.add_argument("--quantize", action="store_true", help="Enable FP4 quantization")
+    parser.add_argument("--quantize", type=str, default="", help="Selective FP4 quantization; subset of 'QKVP'")
     parser.add_argument("--tag", default="", help="Tag to append to filenames")
     parser.add_argument("--task", nargs='+', default=["pile_10k", "gsm8k"], help="Task(s) to evaluate (can specify multiple)")
     
@@ -195,14 +195,14 @@ def main():
     print("=" * 50)
 
     # Set quantization flag for llama_patch
-    llama_patch.quantize_enabled = args.quantize
+    llama_patch.quantize_enabled = args.quantize.upper() if isinstance(args.quantize, str) else args.quantize
     llama_patch.visualize = args.visualize
 
     if args.visualize:
         llama_fp4_attention_forward.visualize = args.visualize
 
     if args.quantize:
-        llama_fp4_attention_forward.quantize_enabled = args.quantize
+        llama_fp4_attention_forward.quantize_enabled = args.quantize.upper() if isinstance(args.quantize, str) else args.quantize
 
     # if args.quantize or args.visualize:
     patch_attention()   ## Enable FP4 attention
