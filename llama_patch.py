@@ -293,7 +293,7 @@ def eager_attention_forward(
     attn_output = torch.matmul(attn_weights, value_states)
     attn_output = attn_output.transpose(1, 2).contiguous()
 
-    return attn_output, attn_weights
+    return attn_output.to(torch.bfloat16), attn_weights.to(torch.bfloat16)
 
 
 def eager_attention_forward_quantized(
@@ -452,9 +452,9 @@ def llama_fp4_attention_forward(
 
     attn_output, attn_weights = eager_attention_forward(
         self,
-        query_states,
-        key_states,
-        value_states,
+        query_states.to(torch.float32),
+        key_states.to(torch.float32),
+        value_states.to(torch.float32),
         attention_mask,
         dropout=0.0 if not self.training else self.attention_dropout,
         scaling=self.scaling,

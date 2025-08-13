@@ -106,7 +106,6 @@ class FP4Quantizer(nn.Module):
         if search:
             nvfp4sim.f32_to_nvf4(quantized_data, scales, x)
         else:
-            print("no search")
             nvfp4sim.f32_to_nvf4_nosearch(quantized_data, scales, x)
 
 
