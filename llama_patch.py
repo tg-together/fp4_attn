@@ -359,6 +359,7 @@ def llama_fp4_attention_forward(
         # Get environment variables for configuration
         self.use_Q_search = os.getenv('FP4_USE_Q_SEARCH', 'false').lower() == 'true'
         self.use_P_search = os.getenv('FP4_USE_P_SEARCH', 'false').lower() == 'true'
+        self.use_KV_search = os.getenv('FP4_USE_KV_SEARCH', 'false').lower() == 'true'
         self.use_dual_quant_q = os.getenv('FP4_USE_DUAL_QUANT_Q', 'true').lower() == 'true'
         self.use_dual_quant_attn = os.getenv('FP4_USE_DUAL_QUANT_ATTN', 'true').lower() == 'true'
         self.zero_point  = os.getenv('ZERO_POINT') and os.getenv('ZERO_POINT').lower()
@@ -369,6 +370,7 @@ def llama_fp4_attention_forward(
         print(
             f"FP4_USE_Q_SEARCH={self.use_Q_search}, "
             f"FP4_USE_P_SEARCH={self.use_P_search}, "
+            f"FP4_USE_KV_SEARCH={self.use_KV_search}, "
             f"FP4_USE_DUAL_QUANT_Q={self.use_dual_quant_q}, "
             f"FP4_USE_DUAL_QUANT_ATTN={self.use_dual_quant_attn}, "
             f"ZERO_POINT={self.zero_point}, "
@@ -413,11 +415,11 @@ def llama_fp4_attention_forward(
 
 
         if self.quantize_Q:
-            Qq_hi, Qq_lo, Qs_hi, Qs_lo, Q_mean, perm = quantize_q(self, query_states, self.use_dual_quant_q, self.use_Q_search, zero_point=self.zero_point)
+            Qq_hi, Qq_lo, Qs_hi, Qs_lo, Q_mean, perm = quantize_q(self, query_states, self.use_dual_quant_q, self.use_Q_search, zero_point=None)
             query_states = Qq_hi*Qs_hi + Qq_lo*Qs_lo + Q_mean
 
         if self.quantize_K:
-            Kq, Ks, K_mean = quantize_k(self, key_states, perm, search=True, zero_point=None)
+            Kq, Ks, K_mean = quantize_k(self, key_states, perm, search=self.use_KV_search, zero_point=self.zero_point)
             key_states = Kq*Ks + K_mean
 
         if self.quantize_V:
