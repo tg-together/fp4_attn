@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+from pickle import NONE
 from lm_eval import simple_evaluate
 from transformers import AutoModelForCausalLM, AutoConfig
 import transformers
@@ -262,11 +263,23 @@ def quantize_p(module, attn_weights, dual=True, search=True, with_shift=True):
 
     return Aq_hi, Aq_lo, As_hi, As_lo, denom
 
+def block_mask_with_first_block(N, m):
+    assert N % m == 0, "N must be divisible by m"
+    row_blk = (torch.arange(N) // m).unsqueeze(1)  # [N,1]
+    col_blk = (torch.arange(N) // m).unsqueeze(0)  # [1,N]
+    mask_diag = (row_blk == col_blk)               # block-diagonal
+    mask_first = torch.arange(N).unsqueeze(0) < m  # first m columns
+    return mask_diag | mask_first                  # combine with OR
+
+
 def eager_attention_forward(
     module: nn.Module,
     query: torch.Tensor,
     key: torch.Tensor,
     value: torch.Tensor,
+    query_uq: torch.Tensor,
+    key_uq: torch.Tensor,
+    value_uq: torch.Tensor,
     attention_mask: Optional[torch.Tensor],
     scaling: float,
     dropout: float = 0.0,
@@ -275,7 +288,17 @@ def eager_attention_forward(
     key_states = repeat_kv(key, module.num_key_value_groups)
     value_states = repeat_kv(value, module.num_key_value_groups)
 
+    key_states_uq=repeat_kv(key_uq, module.num_key_value_groups)
+
     attn_weights = torch.matmul(query, key_states.transpose(2, 3)) * scaling
+
+    attn_weights_uq=torch.matmul(query_uq, key_states_uq.transpose(2, 3)) * scaling
+
+    full_prec_mask=block_mask_with_first_block(key_states.shape[-2], 16).unsqueeze(0).unsqueeze(0)
+
+    attn_weights[full_prec_mask]=attn_weights_uq[full_prec_mask]
+
+
     if attention_mask is not None:
         causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
         attn_weights = attn_weights + causal_mask
@@ -393,6 +416,10 @@ def llama_fp4_attention_forward(
 
     query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
+    query_states_uq=query_states
+    key_states_uq=key_states
+    # value_states_uq=value_states.to(torch.float32)
+
 
     if hasattr(llama_fp4_attention_forward, 'visualize') and llama_fp4_attention_forward.visualize:
         collect_qkv(query_states, key_states, value_states, self.layer_idx)
@@ -415,11 +442,11 @@ def llama_fp4_attention_forward(
 
 
         if self.quantize_Q:
-            Qq_hi, Qq_lo, Qs_hi, Qs_lo, Q_mean, perm = quantize_q(self, query_states, self.use_dual_quant_q, self.use_Q_search, zero_point=None)
+            Qq_hi, Qq_lo, Qs_hi, Qs_lo, Q_mean, perm = quantize_q(self, query_states, self.use_dual_quant_q, self.use_Q_search, zero_point="mean")
             query_states = Qq_hi*Qs_hi + Qq_lo*Qs_lo + Q_mean
 
         if self.quantize_K:
-            Kq, Ks, K_mean = quantize_k(self, key_states, perm, search=self.use_KV_search, zero_point=self.zero_point)
+            Kq, Ks, K_mean = quantize_k(self, key_states, perm, search=True, zero_point=None)
             key_states = Kq*Ks + K_mean
 
         if self.quantize_V:
@@ -457,6 +484,9 @@ def llama_fp4_attention_forward(
         query_states.to(torch.float32),
         key_states.to(torch.float32),
         value_states.to(torch.float32),
+        query_states_uq,
+        key_states_uq,
+        None,
         attention_mask,
         dropout=0.0 if not self.training else self.attention_dropout,
         scaling=self.scaling,
