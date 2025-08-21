@@ -421,7 +421,7 @@ def llama_fp4_attention_forward(
         self.use_dual_quant_attn = os.getenv('FP4_USE_DUAL_QUANT_ATTN', 'true').lower() == 'true'
         self.zero_point  = os.getenv('ZERO_POINT') and os.getenv('ZERO_POINT').lower()
         self.with_shift = os.getenv('SHIFTED_SM', 'true').lower() == 'true'
-        self.mean_before_rope = os.getenv('MEAN_BEFORE_ROPE', 'true').lower() == 'true'
+        self.mean_before_rope = os.getenv('MEAN_BEFORE_ROPE', 'false').lower() == 'true'
         self.fp_mask = os.getenv('FP_MASK', 'true').lower() == 'true'
         # Initialize FP4Quantizer with appropriate parameters
         self.fp4_quantizer = FP4Quantizer(global_sf_max=1536, device=self.q_proj.weight.device)
@@ -452,8 +452,19 @@ def llama_fp4_attention_forward(
     cos, sin = position_embeddings
 
 
-    
+    self.quantize = False
+    perm = None
+    quantize_spec = None
+    if hasattr(llama_fp4_attention_forward, 'quantize_enabled'):
+        quantize_spec = llama_fp4_attention_forward.quantize_enabled
 
+        letters = "QKVP" if isinstance(quantize_spec, bool) and quantize_spec else str(quantize_spec).upper()
+
+        # Per-tensor toggles; P controls attention-weight quantization inside eager path
+        self.quantize_Q = ('Q' in letters)
+        self.quantize_K = ('K' in letters)
+        self.quantize_V = ('V' in letters)
+        self.quantize_P = ('P' in letters)
 
 
     if self.mean_before_rope:
@@ -463,6 +474,8 @@ def llama_fp4_attention_forward(
         key_states_norm=key_states-key_mean
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states_norm, cos, sin)
         _, key_mean = apply_rotary_pos_emb(query_states, key_mean, cos, sin)
+        if not self.quantize_K:
+            key_states=key_states+key_mean
 
     else:
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
@@ -473,22 +486,11 @@ def llama_fp4_attention_forward(
 
     if hasattr(llama_fp4_attention_forward, 'visualize') and llama_fp4_attention_forward.visualize:
         collect_qkv(query_states, key_states, value_states, self.layer_idx)
-    # Check if quantization is enabled
-    # Set defaults and parse selective spec
-    self.quantize = False
-    perm = None
-    quantize_spec = None
-    if hasattr(llama_fp4_attention_forward, 'quantize_enabled'):
-        quantize_spec = llama_fp4_attention_forward.quantize_enabled
+
+
     if self.layer_idx != 0 and quantize_spec:
 
-        letters = "QKVP" if isinstance(quantize_spec, bool) and quantize_spec else str(quantize_spec).upper()
 
-        # Per-tensor toggles; P controls attention-weight quantization inside eager path
-        self.quantize_Q = ('Q' in letters)
-        self.quantize_K = ('K' in letters)
-        self.quantize_V = ('V' in letters)
-        self.quantize_P = ('P' in letters)
 
 
         if self.quantize_Q:
