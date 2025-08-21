@@ -17,7 +17,7 @@ from transformers.utils import ModelOutput
 from fp4_quant_utils import FP4Quantizer
 from visualize import collect_qkv, collect_qkv_diff
 import time
-
+import math
 # Define TransformersKwargs if not available
 try:
     from transformers.modeling_utils import TransformersKwargs
@@ -263,13 +263,46 @@ def quantize_p(module, attn_weights, dual=True, search=True, with_shift=True):
 
     return Aq_hi, Aq_lo, As_hi, As_lo, denom
 
+def first_block_mask(N, m):
+
+    N_pad = math.ceil(N / m) * m
+    nb = N_pad // m 
+    mask_first = torch.arange(N_pad).unsqueeze(0) < m 
+
+
+    
+    return ( mask_first.expand(N_pad, N_pad))[:N, :N] 
+
+
 def block_mask_with_first_block(N, m):
-    assert N % m == 0, "N must be divisible by m"
-    row_blk = (torch.arange(N) // m).unsqueeze(1)  # [N,1]
-    col_blk = (torch.arange(N) // m).unsqueeze(0)  # [1,N]
-    mask_diag = (row_blk == col_blk)               # block-diagonal
-    mask_first = torch.arange(N).unsqueeze(0) < m  # first m columns
-    return mask_diag | mask_first                  # combine with OR
+
+    N_pad = math.ceil(N / m) * m
+    nb = N_pad // m 
+    mask_first = torch.arange(N_pad).unsqueeze(0) < m 
+
+  
+    mask_pad = torch.kron(torch.eye(nb, dtype=torch.bool),
+                          torch.ones((m, m), dtype=torch.bool))
+    
+    return (mask_pad | mask_first)[:N, :N]             
+
+
+def backward_window_with_first_block(T, m):
+    """
+    For each row i:
+      True in columns [i-m+1 .. i] (clipped at 0),
+      plus always True in the first m columns.
+    """
+    col = torch.arange(T).unsqueeze(0)   
+    row = torch.arange(T).unsqueeze(1)  
+
+
+    mask_window = (col <= row) & (col >= row - (m - 1))
+
+
+    mask_first = (col < m)
+
+    return mask_window | mask_first
 
 
 def eager_attention_forward(
@@ -294,9 +327,10 @@ def eager_attention_forward(
 
     attn_weights_uq=torch.matmul(query_uq, key_states_uq.transpose(2, 3)) * scaling
 
-    full_prec_mask=block_mask_with_first_block(key_states.shape[-2], 16).unsqueeze(0).unsqueeze(0)
+    if module.fp_mask:
+        full_prec_mask=first_block_mask(key_states.shape[-2], 16).unsqueeze(0).unsqueeze(0).to(key_states.device)   #can change to backward_window_with_first_block or block_mask_with_first_block also
 
-    attn_weights[full_prec_mask]=attn_weights_uq[full_prec_mask]
+        attn_weights = torch.where(full_prec_mask, attn_weights_uq, attn_weights) 
 
 
     if attention_mask is not None:
@@ -387,6 +421,8 @@ def llama_fp4_attention_forward(
         self.use_dual_quant_attn = os.getenv('FP4_USE_DUAL_QUANT_ATTN', 'true').lower() == 'true'
         self.zero_point  = os.getenv('ZERO_POINT') and os.getenv('ZERO_POINT').lower()
         self.with_shift = os.getenv('SHIFTED_SM', 'true').lower() == 'true'
+        self.mean_before_rope = os.getenv('MEAN_BEFORE_ROPE', 'true').lower() == 'true'
+        self.fp_mask = os.getenv('FP_MASK', 'true').lower() == 'true'
         # Initialize FP4Quantizer with appropriate parameters
         self.fp4_quantizer = FP4Quantizer(global_sf_max=1536, device=self.q_proj.weight.device)
         # Debug: print env var-driven configuration
@@ -397,7 +433,8 @@ def llama_fp4_attention_forward(
             f"FP4_USE_DUAL_QUANT_Q={self.use_dual_quant_q}, "
             f"FP4_USE_DUAL_QUANT_ATTN={self.use_dual_quant_attn}, "
             f"ZERO_POINT={self.zero_point}, "
-            f"SHIFTED_SM={self.with_shift}"
+            f"SHIFTED_SM={self.with_shift}, "
+            f"MEAN_BEFORE_ROPE={self.mean_before_rope}"
         )
 
 
@@ -414,10 +451,23 @@ def llama_fp4_attention_forward(
 
     cos, sin = position_embeddings
 
-    query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
-    query_states_uq=query_states
-    key_states_uq=key_states
+    
+
+
+
+    if self.mean_before_rope:
+        query_states_uq, key_states_uq = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+
+        key_mean=key_states.mean(dim=(0,2),keepdim=True).expand_as(key_states)
+        key_states_norm=key_states-key_mean
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states_norm, cos, sin)
+        _, key_mean = apply_rotary_pos_emb(query_states, key_mean, cos, sin)
+
+    else:
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+        query_states_uq=query_states
+        key_states_uq=key_states
     # value_states_uq=value_states.to(torch.float32)
 
 
@@ -442,12 +492,14 @@ def llama_fp4_attention_forward(
 
 
         if self.quantize_Q:
-            Qq_hi, Qq_lo, Qs_hi, Qs_lo, Q_mean, perm = quantize_q(self, query_states, self.use_dual_quant_q, self.use_Q_search, zero_point="mean")
+            Qq_hi, Qq_lo, Qs_hi, Qs_lo, Q_mean, perm = quantize_q(self, query_states, True, True, zero_point="mean")
             query_states = Qq_hi*Qs_hi + Qq_lo*Qs_lo + Q_mean
 
         if self.quantize_K:
             Kq, Ks, K_mean = quantize_k(self, key_states, perm, search=True, zero_point=None)
             key_states = Kq*Ks + K_mean
+            if self.mean_before_rope:
+                key_states=key_states+key_mean
 
         if self.quantize_V:
             Vq, Vs, V_mean = quantize_v(self, value_states, search=True, zero_point=None)
