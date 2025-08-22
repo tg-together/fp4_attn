@@ -474,7 +474,7 @@ def llama_fp4_attention_forward(
         key_states_norm=key_states-key_mean
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states_norm, cos, sin)
         _, key_mean = apply_rotary_pos_emb(query_states, key_mean, cos, sin)
-        if not self.quantize_K:
+        if not hasattr(self, 'quantize_K') or (hasattr(self, 'quantize_K') and not self.quantize_K):
             key_states=key_states+key_mean
 
     else:
