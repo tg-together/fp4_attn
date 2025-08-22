@@ -328,9 +328,10 @@ def eager_attention_forward(
     attn_weights_uq=torch.matmul(query_uq, key_states_uq.transpose(2, 3)) * scaling
 
     if module.fp_mask:
-        full_prec_mask=first_block_mask(key_states.shape[-2], 16).unsqueeze(0).unsqueeze(0).to(key_states.device)   #can change to backward_window_with_first_block or block_mask_with_first_block also
+        full_prec_mask=block_mask_with_first_block(key_states.shape[-2], 16).unsqueeze(0).unsqueeze(0).to(key_states.device)   #can change to backward_window_with_first_block or block_mask_with_first_block also
 
         attn_weights = torch.where(full_prec_mask, attn_weights_uq, attn_weights) 
+        print("FP_MASK")
 
 
     if attention_mask is not None:
@@ -414,13 +415,16 @@ def llama_fp4_attention_forward(
         self.dequant_dtype = self.q_proj.weight.dtype
         
         # Get environment variables for configuration
-        self.use_Q_search = os.getenv('FP4_USE_Q_SEARCH', 'false').lower() == 'true'
-        self.use_P_search = os.getenv('FP4_USE_P_SEARCH', 'false').lower() == 'true'
-        self.use_KV_search = os.getenv('FP4_USE_KV_SEARCH', 'false').lower() == 'true'
+        self.use_Q_search = os.getenv('FP4_USE_Q_SEARCH', 'true').lower() == 'true'
+        self.use_P_search = os.getenv('FP4_USE_P_SEARCH', 'true').lower() == 'true'
+        self.use_KV_search = os.getenv('FP4_USE_KV_SEARCH', 'true').lower() == 'true'
         self.use_dual_quant_q = os.getenv('FP4_USE_DUAL_QUANT_Q', 'true').lower() == 'true'
         self.use_dual_quant_attn = os.getenv('FP4_USE_DUAL_QUANT_ATTN', 'true').lower() == 'true'
-        self.zero_point  = os.getenv('ZERO_POINT') and os.getenv('ZERO_POINT').lower()
-        self.with_shift = os.getenv('SHIFTED_SM', 'true').lower() == 'true'
+        self.zero_point_KV  = os.getenv('ZERO_POINT_KV') and os.getenv('ZERO_POINT_KV').lower()
+        self.zero_point_Q  = os.getenv("ZERO_POINT_Q", "mean")
+        if self.zero_point_Q == "None":
+            self.zero_point_Q = None
+        self.with_shift = os.getenv('SHIFTED_SM', 'false').lower() == 'true'
         self.mean_before_rope = os.getenv('MEAN_BEFORE_ROPE', 'false').lower() == 'true'
         self.fp_mask = os.getenv('FP_MASK', 'true').lower() == 'true'
         # Initialize FP4Quantizer with appropriate parameters
@@ -432,7 +436,8 @@ def llama_fp4_attention_forward(
             f"FP4_USE_KV_SEARCH={self.use_KV_search}, "
             f"FP4_USE_DUAL_QUANT_Q={self.use_dual_quant_q}, "
             f"FP4_USE_DUAL_QUANT_ATTN={self.use_dual_quant_attn}, "
-            f"ZERO_POINT={self.zero_point}, "
+            f"ZERO_POINT_KV={self.zero_point_KV}, "
+            f"ZERO_POINT_Q={self.zero_point_Q}, "
             f"SHIFTED_SM={self.with_shift}, "
             f"MEAN_BEFORE_ROPE={self.mean_before_rope}"
         )
@@ -494,11 +499,11 @@ def llama_fp4_attention_forward(
 
 
         if self.quantize_Q:
-            Qq_hi, Qq_lo, Qs_hi, Qs_lo, Q_mean, perm = quantize_q(self, query_states, True, True, zero_point="mean")
+            Qq_hi, Qq_lo, Qs_hi, Qs_lo, Q_mean, perm = quantize_q(self, query_states, dual=True, search=self.use_Q_search, zero_point=self.zero_point_Q)
             query_states = Qq_hi*Qs_hi + Qq_lo*Qs_lo + Q_mean
 
         if self.quantize_K:
-            Kq, Ks, K_mean = quantize_k(self, key_states, perm, search=True, zero_point=None)
+            Kq, Ks, K_mean = quantize_k(self, key_states, perm, search=True, zero_point=self.zero_point_KV)
             key_states = Kq*Ks + K_mean
             if self.mean_before_rope:
                 key_states=key_states+key_mean

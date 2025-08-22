@@ -6,7 +6,7 @@
 # FP4_USE_DUAL_QUANT_ATTN=true/false - Use dual/single quantization for attention weights
 # FP4_USE_P_SEARCH=true/false        - Search mode for P quant
 # FP4_USE_Q_SEARCH=true/false        - Search mode for Q/K/V quant
-# ZERO_POINT=min|mean                - Zero-point centering option for Q/K/V
+# ZERO_POINT_Q=min|mean                - Zero-point centering option for Q/K/V
 # SHIFTED_SM=true|false              - Use shifted softmax for P quantization
 # FP4_QUANTIZE=QKVP                  - Selective quantization spec (subset of Q,K,V,P). If set, you can omit --quantize.
 
@@ -24,11 +24,11 @@ CUDA_VISIBLE_DEVICES=2 FP4_USE_DUAL_QUANT_Q=true FP4_USE_Q_SEARCH=false FP4_USE_
 
 CUDA_VISIBLE_DEVICES=3 FP4_USE_DUAL_QUANT_Q=true FP4_USE_Q_SEARCH=true FP4_USE_DUAL_QUANT_ATTN=true FP4_USE_P_SEARCH=true SHIFTED_SM=false python eval.py --device cuda:3 --model meta-llama/Meta-Llama-3-8B --task pile_10k --num_samples $num_samples --quantize QKVP 2>&1 | tee logs/Q_dual_search.txt &
 
-CUDA_VISIBLE_DEVICES=4 FP4_USE_DUAL_QUANT_Q=true FP4_USE_Q_SEARCH=true ZERO_POINT=mean FP4_USE_DUAL_QUANT_ATTN=true FP4_USE_P_SEARCH=true SHIFTED_SM=false python eval.py --device cuda:4 --model meta-llama/Meta-Llama-3-8B --task pile_10k --num_samples $num_samples --quantize QKVP 2>&1 | tee logs/Q_dual_search_mean_zp.txt &
+CUDA_VISIBLE_DEVICES=4 FP4_USE_DUAL_QUANT_Q=true FP4_USE_Q_SEARCH=true ZERO_POINT_Q=mean FP4_USE_DUAL_QUANT_ATTN=true FP4_USE_P_SEARCH=true SHIFTED_SM=false python eval.py --device cuda:4 --model meta-llama/Meta-Llama-3-8B --task pile_10k --num_samples $num_samples --quantize QKVP 2>&1 | tee logs/Q_dual_search_mean_zp.txt &
 
-CUDA_VISIBLE_DEVICES=5 FP4_USE_DUAL_QUANT_Q=true FP4_USE_Q_SEARCH=true ZERO_POINT=min FP4_USE_DUAL_QUANT_ATTN=true FP4_USE_P_SEARCH=true SHIFTED_SM=false python eval.py --device cuda:5 --model meta-llama/Meta-Llama-3-8B --task pile_10k --num_samples $num_samples --quantize QKVP 2>&1 | tee logs/Q_dual_search_min_zp.txt &
+CUDA_VISIBLE_DEVICES=5 FP4_USE_DUAL_QUANT_Q=true FP4_USE_Q_SEARCH=true ZERO_POINT_Q=min FP4_USE_DUAL_QUANT_ATTN=true FP4_USE_P_SEARCH=true SHIFTED_SM=false python eval.py --device cuda:5 --model meta-llama/Meta-Llama-3-8B --task pile_10k --num_samples $num_samples --quantize QKVP 2>&1 | tee logs/Q_dual_search_min_zp.txt &
 
-CUDA_VISIBLE_DEVICES=6 FP4_USE_DUAL_QUANT_Q=false FP4_USE_Q_SEARCH=true ZERO_POINT=mean FP4_USE_DUAL_QUANT_ATTN=true FP4_USE_P_SEARCH=true SHIFTED_SM=false python eval.py --device cuda:6 --model meta-llama/Meta-Llama-3-8B --task pile_10k --num_samples $num_samples --quantize QKVP 2>&1 | tee logs/Q_single_search_mean_zp.txt &
+CUDA_VISIBLE_DEVICES=6 FP4_USE_DUAL_QUANT_Q=false FP4_USE_Q_SEARCH=true ZERO_POINT_Q=mean FP4_USE_DUAL_QUANT_ATTN=true FP4_USE_P_SEARCH=true SHIFTED_SM=false python eval.py --device cuda:6 --model meta-llama/Meta-Llama-3-8B --task pile_10k --num_samples $num_samples --quantize QKVP 2>&1 | tee logs/Q_single_search_mean_zp.txt &
 
-CUDA_VISIBLE_DEVICES=7 FP4_USE_DUAL_QUANT_Q=false FP4_USE_Q_SEARCH=true ZERO_POINT=min FP4_USE_DUAL_QUANT_ATTN=true FP4_USE_P_SEARCH=true SHIFTED_SM=false python eval.py --device cuda:7 --model meta-llama/Meta-Llama-3-8B --task pile_10k --num_samples $num_samples --quantize QKVP 2>&1 | tee logs/Q_single_search_min_zp.txt &
+CUDA_VISIBLE_DEVICES=7 FP4_USE_DUAL_QUANT_Q=false FP4_USE_Q_SEARCH=true ZERO_POINT_Q=min FP4_USE_DUAL_QUANT_ATTN=true FP4_USE_P_SEARCH=true SHIFTED_SM=false python eval.py --device cuda:7 --model meta-llama/Meta-Llama-3-8B --task pile_10k --num_samples $num_samples --quantize QKVP 2>&1 | tee logs/Q_single_search_min_zp.txt &
 
