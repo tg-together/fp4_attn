@@ -288,11 +288,7 @@ def block_mask_with_first_block(N, m):
 
 
 def backward_window_with_first_block(T, m):
-    """
-    For each row i:
-      True in columns [i-m+1 .. i] (clipped at 0),
-      plus always True in the first m columns.
-    """
+
     col = torch.arange(T).unsqueeze(0)   
     row = torch.arange(T).unsqueeze(1)  
 
@@ -327,11 +323,10 @@ def eager_attention_forward(
 
     attn_weights_uq=torch.matmul(query_uq, key_states_uq.transpose(2, 3)) * scaling
 
-    if module.fp_mask:
+    if module.fp_mask and module.quantize:
         full_prec_mask=block_mask_with_first_block(key_states.shape[-2], 16).unsqueeze(0).unsqueeze(0).to(key_states.device)   #can change to backward_window_with_first_block or block_mask_with_first_block also
 
         attn_weights = torch.where(full_prec_mask, attn_weights_uq, attn_weights) 
-        print("FP_MASK")
 
 
     if attention_mask is not None:
@@ -462,6 +457,7 @@ def llama_fp4_attention_forward(
     quantize_spec = None
     if hasattr(llama_fp4_attention_forward, 'quantize_enabled'):
         quantize_spec = llama_fp4_attention_forward.quantize_enabled
+        self.quantize = True
 
         letters = "QKVP" if isinstance(quantize_spec, bool) and quantize_spec else str(quantize_spec).upper()
 
