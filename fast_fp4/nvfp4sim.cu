@@ -21,6 +21,7 @@
 #include <ATen/Dispatch.h>
 #include <ATen/cuda/Atomic.cuh>
 #include <ATen/cuda/CUDAContext.h>
+#include <c10/cuda/CUDAGuard.h>  
 #include <c10/cuda/CUDAStream.h>
 #include <cuda_profiler_api.h>
 
@@ -181,8 +182,10 @@ void f32_to_nvf4(
     int64_t BLOCKS = N / 2;
     int64_t THREADS = 32;
 
+    c10::cuda::OptionalCUDAGuard device_guard;
+    device_guard.set_index(Xin.get_device());
 
-    auto stream = at::cuda::getCurrentCUDAStream().stream();
+    auto stream = at::cuda::getCurrentCUDAStream(Xin.get_device()).stream();
 
     f32_to_nvf4_kernel<<<BLOCKS, THREADS, 0, stream>>>(
         (uint64_t*)XQout.data_ptr<int64_t>(),
@@ -331,10 +334,13 @@ void nvf4_to_f32(
     assert(XSin.dtype() == torch::kFloat8_e4m3fn);
     assert(Xout.dtype() == torch::kFloat32);
 
+    c10::cuda::OptionalCUDAGuard device_guard;
+    device_guard.set_index(XQin.get_device());
+
     int64_t BLOCKS = N / 2;
     int64_t THREADS = 32;
 
-    auto stream = at::cuda::getCurrentCUDAStream().stream();
+    auto stream = at::cuda::getCurrentCUDAStream(XQin.get_device()).stream();
 
     nvf4_to_f32_kernel<<<BLOCKS, THREADS, 0, stream>>>(
         (float*)Xout.data_ptr<float>(),
