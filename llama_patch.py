@@ -18,6 +18,55 @@ from fp4_quant_utils import FP4Quantizer
 from visualize import collect_qkv, collect_qkv_diff
 import time
 import math
+import numpy as np
+
+# Global storage for running averages of Q and K means per layer
+qk_running_averages = {
+    'q_means': {},  # layer_idx -> running average of Q means (1 x H_q x 1 x D)
+    'k_means': {},  # layer_idx -> running average of K means (1 x H_k x 1 x D)
+    'counts': {}    # layer_idx -> count of samples
+}
+
+
+def compute_and_store_qk_means(query_states, key_states, layer_idx):
+    """Compute means of Q and K states and update running averages.
+    
+    Args:
+        query_states: Query tensor of shape [B, H_q, T, D]
+        key_states: Key tensor of shape [B, H_k, T, D]
+        layer_idx: Layer index for storing averages
+        
+    Returns:
+        query_mean: Mean of query states with shape [1, H_q, 1, D]
+        key_mean: Mean of key states with shape [1, H_k, 1, D]
+    """
+
+  
+    # Compute means
+    query_mean = query_states.mean(dim=(0,2), keepdim=True)  # [1, H_q, 1, D]
+    key_mean = key_states.mean(dim=(0,2), keepdim=True)  # [1, H_k, 1, D]
+    
+    # Update running averages (proper incremental averaging) - keep 4D shape
+    if layer_idx not in qk_running_averages['counts']:
+        qk_running_averages['q_means'][layer_idx] = torch.zeros_like(query_mean).cpu()  # [1, H_q, 1, D]
+        qk_running_averages['k_means'][layer_idx] = torch.zeros_like(key_mean).cpu()  # [1, H_k, 1, D]
+        qk_running_averages['counts'][layer_idx] = 0
+    
+    # Compute running average: new_avg = (old_avg * count + new_value) / (count + 1)
+    count = qk_running_averages['counts'][layer_idx]
+    qk_running_averages['q_means'][layer_idx] = (
+        (qk_running_averages['q_means'][layer_idx] * count + 
+         query_mean.detach().cpu()) / (count + 1)
+    )
+    qk_running_averages['k_means'][layer_idx] = (
+        (qk_running_averages['k_means'][layer_idx] * count + 
+         key_mean.detach().cpu()) / (count + 1)
+    )
+    qk_running_averages['counts'][layer_idx] += 1
+    
+    return query_mean, key_mean
+
+
 # Define TransformersKwargs if not available
 try:
     from transformers.modeling_utils import TransformersKwargs
@@ -62,13 +111,13 @@ def quantize_q(module, q_orig, dual=True, search=True, permute=False, zero_point
     B, H_q, T, D = q_orig.shape
 
     q_ = q_orig
-    sorted_mean=torch.zeros(H_q,D).to(q_orig.device).to(torch.float32)
+    sorted_mean=torch.zeros(H_q,D).to(q_orig.device).to(torch.float32)[None,:,None,:]
     perm=None
 
     if zero_point=="mean":
-        zp = q_orig.mean(dim=(0, 2))
+        zp = module.qk_mean_averages_after_rope[f'layer_{module.layer_idx}']['q_mean_avg'].to(q_orig.device) #q_orig.mean(dim=(0, 2))
     elif zero_point=="min":
-        zp = torch.amin(q_orig.abs(), dim = (0,2))
+        zp = torch.amin(q_orig.abs(), dim = (0,2)).expand_as(q_orig)
 
     # if permute:
     #     zp = q_orig.mean(dim=(0, 2))
@@ -79,7 +128,7 @@ def quantize_q(module, q_orig, dual=True, search=True, permute=False, zero_point
 
     if zero_point:
         sorted_mean=zp.to(torch.float32)
-        q_ = q_ - sorted_mean[None, :, None, :]
+        q_ = q_ - sorted_mean
 
     q_=q_.permute(0, 2, 1, 3)
 
@@ -100,7 +149,7 @@ def quantize_q(module, q_orig, dual=True, search=True, permute=False, zero_point
         Qs_lo = Qs_lo.reshape(B, T, H_q, 1).permute(0, 2, 1, 3)
 
 
-    sorted_mean=sorted_mean[None, :, None, :]
+    sorted_mean=sorted_mean
 
     
 
@@ -117,13 +166,13 @@ def quantize_k(module, k_orig, perm=None, dual=False, search=True, permute=False
     B, H_k, T, D = k_orig.shape
 
     k_ = k_orig
-    sorted_mean=torch.zeros(H_k,D).to(k_orig.device).to(torch.float32)
+    sorted_mean=torch.zeros(H_k,D).to(k_orig.device).to(torch.float32)[None,:,None,:]
 
 
     if zero_point=="mean":
-        zp = k_orig.mean(dim=(0, 2))
+        zp = module.qk_mean_averages_after_rope[f'layer_{module.layer_idx}']['k_mean_avg'].to(k_orig.device) #k_orig.mean(dim=(0, 2))
     elif zero_point=="min":
-        zp = torch.amin(k_orig.abs(), dim = (0,2))
+        zp = torch.amin(k_orig.abs(), dim = (0,2)).expand_as(k_orig)
 
     # if permute:
     #     zp = k_orig.mean(dim=(0, 2))
@@ -133,7 +182,7 @@ def quantize_k(module, k_orig, perm=None, dual=False, search=True, permute=False
 
     if zero_point:
         sorted_mean=zp.to(torch.float32)
-        k_ = k_ - sorted_mean[None, :, None, :]
+        k_ = k_ - sorted_mean
 
     k_=k_.permute(0, 2, 1, 3)
 
@@ -153,7 +202,7 @@ def quantize_k(module, k_orig, perm=None, dual=False, search=True, permute=False
         Ks_lo = Ks_lo.reshape(B, T, H_k, 1).permute(0, 2, 1, 3)
 
 
-    sorted_mean=sorted_mean[None, :, None, :]
+    sorted_mean=sorted_mean
 
 
 
@@ -436,7 +485,14 @@ def llama_fp4_attention_forward(
             f"SHIFTED_SM={self.with_shift}, "
             f"MEAN_BEFORE_ROPE={self.mean_before_rope}"
         )
-
+        try:
+            self.qk_mean_averages_before_rope=torch.load("qk_mean_averages_before_rope.pt")
+            print("Loaded qk_mean_averages_before_rope.pt")
+            self.qk_mean_averages_after_rope=torch.load("qk_mean_averages_after_rope.pt")
+            print("Loaded qk_mean_averages_after_rope.pt")
+        except:
+            self.qk_mean_averages_before_rope=None
+            self.qk_mean_averages_after_rope=None
 
     
     input_shape = hidden_states.shape[:-1]
@@ -468,18 +524,32 @@ def llama_fp4_attention_forward(
         self.quantize_P = ('P' in letters)
 
 
-    if self.mean_before_rope:
+    if self.layer_idx != 0 and self.mean_before_rope:
         query_states_uq, key_states_uq = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
-        key_mean=key_states.mean(dim=(0,2),keepdim=True).expand_as(key_states)
-        key_states_norm=key_states-key_mean
-        query_states, key_states = apply_rotary_pos_emb(query_states, key_states_norm, cos, sin)
-        _, key_mean = apply_rotary_pos_emb(query_states, key_mean, cos, sin)
+
+        query_mean=self.qk_mean_averages_before_rope[f'layer_{self.layer_idx}']['q_mean_avg'].to(query_states.device)
+        query_states=query_states-query_mean
+
+        
+        key_mean=self.qk_mean_averages_before_rope[f'layer_{self.layer_idx}']['k_mean_avg'].to(key_states.device)
+        key_states=key_states-key_mean
+
+
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+        query_mean,  key_mean = apply_rotary_pos_emb(query_mean, key_mean, cos, sin)
+
+
+        query_states=query_states_uq
+
+
         if not hasattr(self, 'quantize_K') or (hasattr(self, 'quantize_K') and not self.quantize_K):
-            key_states=key_states+key_mean
+            key_states=key_states+key_mean.expand_as(key_states)
 
     else:
+        # compute_and_store_qk_means(query_states, key_states, self.layer_idx)
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+        
         query_states_uq=query_states
         key_states_uq=key_states
     # value_states_uq=value_states.to(torch.float32)
@@ -497,6 +567,8 @@ def llama_fp4_attention_forward(
         if self.quantize_Q:
             Qq_hi, Qq_lo, Qs_hi, Qs_lo, Q_mean, perm = quantize_q(self, query_states, dual=True, search=self.use_Q_search, zero_point=self.zero_point_Q)
             query_states = Qq_hi*Qs_hi + Qq_lo*Qs_lo + Q_mean
+            # if self.mean_before_rope:   
+            #     query_states=query_states+query_mean
 
         if self.quantize_K:
             Kq, Ks, K_mean = quantize_k(self, key_states, perm, search=True, zero_point=self.zero_point_KV)

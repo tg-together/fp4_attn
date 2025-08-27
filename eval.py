@@ -11,6 +11,7 @@ from llama_patch import llama_fp4_attention_forward
 import socket
 from datetime import datetime, timedelta
 import logging
+import numpy as np
 
 llama_patch.collect_qkv = collect_qkv
 llama_patch.collect_qkv_diff = collect_qkv_diff
@@ -87,6 +88,33 @@ def print_pile_10k_metrics(metrics, tag="", model="", quantize=False):
     print("="*80)
     
     return csv_line
+
+
+def save_qk_mean_averages(tag=""):
+    """Save the running averages of Q and K means per layer.
+    Each mean has shape [1, H, 1, D] where H is the number of heads."""
+    from llama_patch import qk_running_averages
+    
+    if not qk_running_averages['counts']:
+        print("No Q/K mean averages to save")
+        return
+    
+    # Collect the averages (already computed incrementally)
+    averages = {}
+    for layer_idx in sorted(qk_running_averages['counts'].keys()):
+        count = qk_running_averages['counts'][layer_idx]
+        if count > 0:
+            averages[f'layer_{layer_idx}'] = {
+                'q_mean_avg': qk_running_averages['q_means'][layer_idx],  # Shape: [1, H_q, 1, D]
+                'k_mean_avg': qk_running_averages['k_means'][layer_idx],  # Shape: [1, H_k, 1, D]
+                'num_samples': count
+            }
+    
+    # Save to file using torch.save
+    filename = f"qk_mean_averages_{tag}.pt" if tag else "qk_mean_averages_before_rope.pt"
+    torch.save(averages, filename)
+    
+    print(f"Saved Q/K mean averages to {filename}")
 
 
 def calculate_perplexity(model, tasks, num_samples=None, device="auto", max_length=2048, **eval_kwargs):
@@ -219,6 +247,10 @@ def main():
                 max_length=max_length,
                 **eval_kwargs
                 )
+        
+        # Save Q/K mean averages after perplexity calculation
+        # save_qk_mean_averages(args.tag)
+        
         # export_memory_snapshot()
         # stop_record_memory_history()
         print(f"Model: {args.model}")
