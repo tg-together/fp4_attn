@@ -259,7 +259,10 @@ def main():
         print(f"Tag: {args.tag}")
         for task in args.task:
             print(f"Task: {task}")
-            print(f"Metrics: {results['results'][task]}")
+            try:
+                print(f"Metrics: {results['results'][task]}")
+            except:
+                print(f"Metrics: {results}")
             
             # Special formatting for pile_10k metrics
             if task == "pile_10k":
