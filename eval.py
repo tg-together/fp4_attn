@@ -123,11 +123,12 @@ def calculate_perplexity(model, tasks, num_samples=None, device="auto", max_leng
     # Base arguments
     base_args = {
         "model": "hf",
-        "model_args": f"pretrained={model},max_length={max_length}",
+        "model_args": f"pretrained={model},max_length={max_length},trust_remote_code=True",
         "tasks": tasks,
         "num_fewshot": 0,
         "batch_size": 20,
         "device": device,
+        "confirm_run_unsafe_code":True
     }
     
     # Add limit if specified
