@@ -19,6 +19,7 @@ from visualize import collect_qkv, collect_qkv_diff
 import time
 import math
 import numpy as np
+from scipy.linalg import hadamard
 
 # Global storage for running averages of Q and K means per layer
 qk_running_averages = {
@@ -43,8 +44,31 @@ def compute_and_store_qk_means(query_states, key_states, layer_idx):
 
   
     # Compute means
-    query_mean = query_states.mean(dim=(0,2), keepdim=True)  # [1, H_q, 1, D]
-    key_mean = key_states.mean(dim=(0,2), keepdim=True)  # [1, H_k, 1, D]
+    # query_mean = query_states.mean(dim=(0,2), keepdim=True)  # [1, H_q, 1, D]
+    # key_mean = key_states.mean(dim=(0,2), keepdim=True)  # [1, H_k, 1, D]
+
+    QT_Q_all_heads = []
+    B, H, T, D = query_states.shape
+
+    for h in range(H):
+        Q_h = query_states[:, h, :, :]         # (B, T, D)
+        Q_h = Q_h.reshape(B * T, D) # (B*T, D)
+        QT_Q = Q_h.T @ Q_h          # (D, D)
+        QT_Q_all_heads.append(QT_Q)
+
+    query_mean = torch.stack(QT_Q_all_heads)  # (H, D, D)
+
+
+    KT_K_all_heads = []
+    B, H, T, D = key_states.shape
+
+    for h in range(H):
+        K_h = key_states[:, h, :, :]         # (B, T, D)
+        K_h = K_h.reshape(B * T, D) # (B*T, D)
+        KT_K = K_h.T @ K_h          # (D, D)
+        KT_K_all_heads.append(KT_K)
+
+    key_mean = torch.stack(KT_K_all_heads)  # (H, D, D)
     
     # Update running averages (proper incremental averaging) - keep 4D shape
     if layer_idx not in qk_running_averages['counts']:
@@ -66,7 +90,6 @@ def compute_and_store_qk_means(query_states, key_states, layer_idx):
     
     return query_mean, key_mean
 
-
 # Define TransformersKwargs if not available
 try:
     from transformers.modeling_utils import TransformersKwargs
@@ -75,6 +98,63 @@ except ImportError:
     class TransformersKwargs:
         pass
 
+def permute_adjacent_pairs(Q):
+    B,H,T,D = Q.shape
+    D=D//2
+    d = 2 * D
+    P = torch.zeros(d, d).to(Q.device).to(torch.float32)
+    for i in range(d):
+        if i % 2 == 0:
+            P[i, i // 2] = 1          # From first half (real)
+        else:
+            P[i, D + (i // 2)] = 1    # From second half (imag)
+    P=P.transpose(0, 1)
+    P_broadcasted = P.unsqueeze(0).expand(H, -1, -1)  # (H, D, D)
+    Q_permuted = torch.einsum("bhtd,hde->bhte", Q, P_broadcasted)  # (B, H, T, D)
+    return Q_permuted
+
+def batch_matrix_sqrt_and_inv_sqrt(H, eps=1e-10):
+    eigvals, eigvecs = torch.linalg.eigh(H)  # (H, D), (H, D, D)
+
+    sqrt_vals = torch.sqrt(torch.clamp(eigvals, min=eps))
+    inv_sqrt_vals = 1.0 / sqrt_vals
+
+    H_sqrt = eigvecs @ torch.diag_embed(sqrt_vals) @ eigvecs.transpose(-1, -2)
+    H_inv_sqrt = eigvecs @ torch.diag_embed(inv_sqrt_vals) @ eigvecs.transpose(-1, -2)
+
+    return H_sqrt, H_inv_sqrt
+
+def incoherence_processing(Q,K, H, K_mean=None):
+
+    B, H_q, T, D = Q.shape
+    B, H_k, T, D = K.shape
+
+    M = (torch.tensor(hadamard(D), dtype=torch.float32) / math.sqrt(D)).to(Q.device)
+    S = (torch.randn(D) > 0).to(torch.float32) * 2 - 1
+    S=S.to(Q.device)
+    
+    scale1 = S.view(1, 1, 1, D)
+    C_sqrt, C_inv_sqrt=batch_matrix_sqrt_and_inv_sqrt(H)
+
+
+    
+    # Q = torch.einsum("bhtd,hde->bhte", Q, C_inv_sqrt)
+    Q =  Q* scale1.squeeze(-1)  # (B, H, T, D)
+    Q = torch.einsum("bhtd,de->bhte", Q, M)
+
+
+    
+    # K = torch.einsum("bhtd,hde->bhte", K, C_sqrt)
+    K =  K* scale1.squeeze(-1)  # (B, H, T, D)
+    K = torch.einsum("bhtd,de->bhte", K, M)
+
+    if K_mean is not None:
+
+        # K_mean = torch.einsum("bhtd,hde->bhte", K_mean, C_sqrt)
+        K_mean =  K_mean* scale1.squeeze(-1)  # (B, H, T, D)
+        K_mean = torch.einsum("bhtd,de->bhte", K_mean, M)
+
+    return Q, K, K_mean
 
 # def print_diff(q_orig, k_orig, v_orig, q_quant, k_quant, v_quant,tag):
     
@@ -171,6 +251,8 @@ def quantize_k(module, k_orig, perm=None, dual=False, search=True, permute=False
 
     if zero_point=="mean":
         zp = module.qk_mean_averages_after_rope[f'layer_{module.layer_idx}']['k_mean_avg'].to(k_orig.device) #k_orig.mean(dim=(0, 2))
+        if zp.shape[1]!=H_k:
+            zp=repeat_kv(zp, module.num_key_value_groups)
     elif zero_point=="min":
         zp = torch.amin(k_orig.abs(), dim = (0,2)).expand_as(k_orig)
 
@@ -363,7 +445,11 @@ def eager_attention_forward(
     dropout: float = 0.0,
     **kwargs: Unpack[TransformersKwargs],
 ):
-    key_states = repeat_kv(key, module.num_key_value_groups)
+    if key.shape[1]!=query.shape[1]:
+        key_states = repeat_kv(key, module.num_key_value_groups)
+    else:
+        key_states=key
+
     value_states = repeat_kv(value, module.num_key_value_groups)
 
     key_states_uq=repeat_kv(key_uq, module.num_key_value_groups)
@@ -373,7 +459,7 @@ def eager_attention_forward(
     attn_weights_uq=torch.matmul(query_uq, key_states_uq.transpose(2, 3)) * scaling
 
     if module.fp_mask and module.quantize:
-        full_prec_mask=block_mask_with_first_block(key_states.shape[-2], 16).unsqueeze(0).unsqueeze(0).to(key_states.device)   #can change to backward_window_with_first_block or block_mask_with_first_block also
+        full_prec_mask=block_mask_with_first_block(key_states.shape[-2], 64).unsqueeze(0).unsqueeze(0).to(key_states.device)   #can change to backward_window_with_first_block or block_mask_with_first_block also
 
         attn_weights = torch.where(full_prec_mask, attn_weights_uq, attn_weights) 
 
@@ -471,6 +557,7 @@ def llama_fp4_attention_forward(
         self.with_shift = os.getenv('SHIFTED_SM', 'false').lower() == 'true'
         self.mean_before_rope = os.getenv('MEAN_BEFORE_ROPE', 'false').lower() == 'true'
         self.fp_mask = os.getenv('FP_MASK', 'true').lower() == 'true'
+        self.ip = os.getenv('IP', 'false').lower() == 'true'
         # Initialize FP4Quantizer with appropriate parameters
         self.fp4_quantizer = FP4Quantizer(global_sf_max=1536, device=self.q_proj.weight.device)
         # Debug: print env var-driven configuration
@@ -483,16 +570,16 @@ def llama_fp4_attention_forward(
             f"ZERO_POINT_KV={self.zero_point_KV}, "
             f"ZERO_POINT_Q={self.zero_point_Q}, "
             f"SHIFTED_SM={self.with_shift}, "
-            f"MEAN_BEFORE_ROPE={self.mean_before_rope}"
+            f"MEAN_BEFORE_ROPE={self.mean_before_rope}, "
+            f"IP={self.ip}"
         )
-        try:
-            self.qk_mean_averages_before_rope=torch.load("qk_mean_averages_before_rope.pt")
-            print("Loaded qk_mean_averages_before_rope.pt")
-            self.qk_mean_averages_after_rope=torch.load("qk_mean_averages_after_rope.pt")
-            print("Loaded qk_mean_averages_after_rope.pt")
-        except:
-            self.qk_mean_averages_before_rope=None
-            self.qk_mean_averages_after_rope=None
+
+        self.qk_mean_averages_before_rope=torch.load("qk_mean_averages_before_rope.pt")
+        print("Loaded qk_mean_averages_before_rope.pt")
+        self.qk_mean_averages_after_rope=torch.load("qk_mean_averages_after_rope.pt")
+        print("Loaded qk_mean_averages_after_rope.pt")
+        self.q_hessian=torch.load("qk_hessians.pt")
+
 
     
     input_shape = hidden_states.shape[:-1]
@@ -523,6 +610,7 @@ def llama_fp4_attention_forward(
         self.quantize_V = ('V' in letters)
         self.quantize_P = ('P' in letters)
 
+    key_mean=torch.zeros_like(key_states).to(key_states.device)
 
     if self.layer_idx != 0 and self.mean_before_rope:
         query_states_uq, key_states_uq = apply_rotary_pos_emb(query_states, key_states, cos, sin)
@@ -546,23 +634,53 @@ def llama_fp4_attention_forward(
         if not hasattr(self, 'quantize_K') or (hasattr(self, 'quantize_K') and not self.quantize_K):
             key_states=key_states+key_mean.expand_as(key_states)
 
-    else:
-        # compute_and_store_qk_means(query_states, key_states, self.layer_idx)
-        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
         
+
+    else:
+        
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+        # compute_and_store_qk_means(query_states, key_states, self.layer_idx)
         query_states_uq=query_states
         key_states_uq=key_states
-    # value_states_uq=value_states.to(torch.float32)
+
 
 
     if hasattr(llama_fp4_attention_forward, 'visualize') and llama_fp4_attention_forward.visualize:
         collect_qkv(query_states, key_states, value_states, self.layer_idx)
 
 
+    
     if self.layer_idx != 0 and quantize_spec:
 
+        # query_states=permute_adjacent_pairs(query_states.to(torch.float32))
+        # key_states=permute_adjacent_pairs(key_states.to(torch.float32))
 
 
+        if self.ip:
+            query_states=query_states.to(torch.float32)
+            key_states=key_states.to(torch.float32)
+            key_mean=key_mean.to(torch.float32)
+
+            key_states = repeat_kv(key_states, self.num_key_value_groups)
+            key_mean = repeat_kv(key_mean, self.num_key_value_groups)
+
+
+            # hessian=self.q_hessian[f'layer_{self.layer_idx}']['q_mean_avg'].to(query_states.device).to(torch.float32)
+            QT_Q_all_heads=[]
+            B, H, T, D = query_states.shape
+            Q=query_states
+            for h in range(H):
+                Q_h = Q[:, h, :, :]         # (B, T, D)
+                Q_h = Q_h.reshape(B * T, D) # (B*T, D)
+                QT_Q = Q_h.T @ Q_h          # (D, D)
+                QT_Q_all_heads.append(QT_Q)
+
+            hessian = torch.stack(QT_Q_all_heads).to(torch.float32)  # (H, D, D)
+
+
+            # print((query_states@(key_states.transpose(2, 3)))[0,0,0:3,0:16])
+
+            query_states, key_states, key_mean= incoherence_processing(query_states, key_states, hessian, key_mean)
 
         if self.quantize_Q:
             Qq_hi, Qq_lo, Qs_hi, Qs_lo, Q_mean, perm = quantize_q(self, query_states, dual=True, search=self.use_Q_search, zero_point=self.zero_point_Q)
@@ -574,7 +692,8 @@ def llama_fp4_attention_forward(
             Kq, Ks, K_mean = quantize_k(self, key_states, perm, search=True, zero_point=self.zero_point_KV)
             key_states = Kq*Ks + K_mean
             if self.mean_before_rope:
-                key_states=key_states+key_mean
+
+                key_states=key_states+(key_mean)
 
         if self.quantize_V:
             Vq, Vs, V_mean = quantize_v(self, value_states, search=True, zero_point=None)

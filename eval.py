@@ -111,7 +111,7 @@ def save_qk_mean_averages(tag=""):
             }
     
     # Save to file using torch.save
-    filename = f"qk_mean_averages_{tag}.pt" if tag else "qk_mean_averages_before_rope.pt"
+    filename = f"qk_mean_averages_{tag}.pt" if tag else "qk_hessians.pt"
     torch.save(averages, filename)
     
     print(f"Saved Q/K mean averages to {filename}")
@@ -259,10 +259,8 @@ def main():
         print(f"Tag: {args.tag}")
         for task in args.task:
             print(f"Task: {task}")
-            try:
-                print(f"Metrics: {results['results'][task]}")
-            except:
-                print(f"Metrics: {results}")
+
+            print(f"Metrics: {results}")
             
             # Special formatting for pile_10k metrics
             if task == "pile_10k":
