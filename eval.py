@@ -260,17 +260,19 @@ def main():
         print(f"Tag: {args.tag}")
         for task in args.task:
             print(f"Task: {task}")
-
-            print(f"Metrics: {results}")
+            try:
+                print(f"Metrics: {results['results'][task]}")
+            except:
+                print(f"Metrics: {results['results']}")
             
-            # Special formatting for pile_10k metrics
-            if task == "pile_10k":
-                print_pile_10k_metrics(
-                    metrics=results['results'][task],
-                    tag=args.tag,
-                    model=args.model,
-                    quantize=args.quantize
-                )
+            # # Special formatting for pile_10k metrics
+            # if task == "pile_10k":
+            #     print_pile_10k_metrics(
+            #         metrics=results['results'][task],
+            #         tag=args.tag,
+            #         model=args.model,
+            #         quantize=args.quantize
+            #     )
 
         if args.output:
             output_filename = f"{args.output}_{args.tag}.json" if args.tag else args.output
