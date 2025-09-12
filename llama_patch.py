@@ -34,24 +34,19 @@ except ImportError:
 
 
 def batch_matrix_sqrt_and_inv_sqrt(H, eps=1e-10):
-    # eigvals, eigvecs = torch.linalg.eigh(H)  # (H, D), (H, D, D)
 
-    # sqrt_vals = torch.sqrt(torch.clamp(eigvals, min=eps))
-    # inv_sqrt_vals = 1.0 / sqrt_vals
 
-    # H_sqrt = eigvecs @ torch.diag_embed(sqrt_vals) @ eigvecs.transpose(-1, -2)
-    # H_inv_sqrt = eigvecs @ torch.diag_embed(inv_sqrt_vals) @ eigvecs.transpose(-1, -2)
-    L = torch.linalg.cholesky(H.cpu())   # (H, D, D), lower triangular
-    
-    # Square root: take L (triangular square root)
-    H_sqrt = L
-    
-    # Inverse square root: L^{-T}
-    # torch.cholesky_inverse gives H^{-1}, but we want H^{-1/2}
-    # So directly compute L^{-T}
-    L_inv = torch.inverse(L)           # (H, D, D)
-    H_invsqrt = L_inv #.transpose(-1, -2)
-    
+    eigvals, eigvecs = torch.linalg.eigh(H)  # eigvals: (B, D), eigvecs: (B, D, D)
+
+
+    eigvals = torch.clamp(eigvals, min=eps)
+
+    sqrt_eigvals = torch.sqrt(eigvals)
+    invsqrt_eigvals = 1.0 / sqrt_eigvals
+
+    H_sqrt = eigvecs @ torch.diag_embed(sqrt_eigvals) @ eigvecs.transpose(-1, -2)
+    H_invsqrt = eigvecs @ torch.diag_embed(invsqrt_eigvals) @ eigvecs.transpose(-1, -2)
+
     return H_sqrt, H_invsqrt
 
 def incoherence_processing(Q,K, H, K_mean=None):
@@ -59,7 +54,6 @@ def incoherence_processing(Q,K, H, K_mean=None):
     B, H_q, T, D = Q.shape
     B, H_k, T, D = K.shape
 
-    # M = (torch.tensor(hadamard(D), dtype=torch.float32) / math.sqrt(D)).to(Q.device)
 
     M=torch.tensor(ortho_group.rvs(dim=D), dtype=torch.float32).to(Q.device)
     reg_scale=1e-2
@@ -68,39 +62,25 @@ def incoherence_processing(Q,K, H, K_mean=None):
 
     H.diagonal(dim1=-2, dim2=-1).add_(reg_scale)
 
-
-
-    # S = (torch.randn(D) > 0).to(torch.float32) * 2 - 1
-    # S=S.to(Q.device)
-    
-    # scale1 = S.view(1, 1, 1, D)
     C_sqrt, C_inv_sqrt=batch_matrix_sqrt_and_inv_sqrt(H)
 
     C_sqrt=C_sqrt.to(Q.device)
     C_inv_sqrt=C_inv_sqrt.to(Q.device)
-
-    
-
     C_inv_sqrt=C_inv_sqrt.repeat(4, 1, 1)
 
-    # for i in range(4):
-    #     print(C_inv_sqrt[i,:,:]@C_sqrt)
-    # raise
+
     
-    # Q = torch.einsum("bhtd,hde->bhte", Q, C_inv_sqrt)
-    # Q =  Q* scale1.squeeze(-1)  # (B, H, T, D)
+    Q = torch.einsum("bhtd,hde->bhte", Q, C_inv_sqrt)
     Q = torch.einsum("bhtd,de->bhte", Q, M)
 
 
     
-    # K = torch.einsum("bhtd,hde->bhte", K, C_sqrt)
-    # K =  K* scale1.squeeze(-1)  # (B, H, T, D)
+    K = torch.einsum("bhtd,hde->bhte", K, C_sqrt)
     K = torch.einsum("bhtd,de->bhte", K, M)
 
     if K_mean is not None:
 
-        # K_mean = torch.einsum("bhtd,hde->bhte", K_mean, C_sqrt)
-        # K_mean =  K_mean* scale1.squeeze(-1)  # (B, H, T, D)
+        K_mean = torch.einsum("bhtd,hde->bhte", K_mean, C_sqrt)
         K_mean = torch.einsum("bhtd,de->bhte", K_mean, M)
 
     return Q, K, K_mean
