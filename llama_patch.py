@@ -55,7 +55,7 @@ def incoherence_processing(Q,K, H, K_mean=None):
     B, H_k, T, D = K.shape
 
 
-    M=torch.tensor(ortho_group.rvs(dim=D), dtype=torch.float32).to(Q.device)
+    M=torch.tensor(ortho_group.rvs(dim=D), dtype=torch.float64).to(Q.device)
     reg_scale=1e-2
 
     H.div_(H.diagonal(dim1=-2, dim2=-1).mean(dim=-1).unsqueeze(-1).unsqueeze(-1))
@@ -228,7 +228,7 @@ def eager_attention_forward(
 
     attn_weights_uq=torch.matmul(query_uq, key_states_uq.transpose(2, 3)) * scaling
 
-    if module.fp_mask and module.quantize:
+    if hasattr(module, 'quantize') and module.fp_mask:
         full_prec_mask=block_mask_with_first_block(key_states.shape[-2], 64).unsqueeze(0).unsqueeze(0).to(key_states.device)   #can change to backward_window_with_first_block or block_mask_with_first_block also
 
         attn_weights = torch.where(full_prec_mask, attn_weights_uq, attn_weights) 
@@ -242,8 +242,10 @@ def eager_attention_forward(
     attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32)
     attn_weights = nn.functional.dropout(attn_weights, p=module.attention_dropout, training=module.training)
 
-    Aq_hi, Aq_lo, As_hi, As_lo = quantize_p(module, attn_weights, module.use_dual_quant_attn)
-    attn_weights = (Aq_hi*As_hi+Aq_lo*As_lo)
+    if hasattr(module, 'quantize') and module.quantize:
+
+        Aq_hi, Aq_lo, As_hi, As_lo = quantize_p(module, attn_weights, module.use_dual_quant_attn)
+        attn_weights = (Aq_hi*As_hi+Aq_lo*As_lo)
 
 
     attn_output = torch.matmul(attn_weights, value_states)
@@ -311,7 +313,7 @@ def llama_fp4_attention_forward(
 
 
 
-    if self.layer_idx != 0 and self.quantize:
+    if self.layer_idx != 0 and hasattr(self, 'quantize') and self.quantize:
 
         key_mean=torch.zeros_like(key_states).to(key_states.device)
 
@@ -329,14 +331,14 @@ def llama_fp4_attention_forward(
 
 
         if self.ip:
-            query_states=query_states.to(torch.float32)
-            key_states=key_states.to(torch.float32)
-            key_mean=key_mean.to(torch.float32)
+            # query_states=query_states.to(torch.float32)
+            # key_states=key_states.to(torch.float32)
+            # key_mean=key_mean.to(torch.float32)
 
 
-            hessian=self.q_hessian[f'layer_{self.layer_idx}']['q_mean_avg'].to(query_states.device).to(torch.float32)
-            query_states, key_states, key_mean= incoherence_processing(query_states, key_states, hessian.clone(), key_mean)
-      
+            hessian=self.q_hessian[f'layer_{self.layer_idx}']['q_mean_avg'].to(query_states.device)
+            query_states, key_states, key_mean= incoherence_processing(query_states.to(torch.float64), key_states.to(torch.float64), hessian.clone().to(torch.float64), key_mean.to(torch.float64))
+
         Qq_hi, Qq_lo, Qs_hi, Qs_lo= quantize_q(self, query_states, dual=self.use_dual_quant_q)
         query_states = Qq_hi*Qs_hi + Qq_lo*Qs_lo 
 
