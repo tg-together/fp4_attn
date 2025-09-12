@@ -263,7 +263,9 @@ def main():
             try:
                 print(f"Metrics: {results['results'][task]}")
             except:
-                print(f"Metrics: {results['results']}")
+                if results is not None:
+                    print(f"Metrics: {results['results']}")
+
             
             # # Special formatting for pile_10k metrics
             # if task == "pile_10k":
