@@ -20,6 +20,7 @@ import time
 import math
 import numpy as np
 from scipy.linalg import hadamard
+from scipy.stats import ortho_group
 
 # Global storage for running averages of Q and K means per layer
 qk_running_averages = {
@@ -41,7 +42,9 @@ def compute_and_store_qk_means(query_states, key_states, layer_idx):
         query_mean: Mean of query states with shape [1, H_q, 1, D]
         key_mean: Mean of key states with shape [1, H_k, 1, D]
     """
-
+    query_states=query_states.to(torch.float32)
+    key_states=key_states.to(torch.float32)
+    
   
     # Compute means
     # query_mean = query_states.mean(dim=(0,2), keepdim=True)  # [1, H_q, 1, D]
@@ -57,6 +60,10 @@ def compute_and_store_qk_means(query_states, key_states, layer_idx):
         QT_Q_all_heads.append(QT_Q)
 
     query_mean = torch.stack(QT_Q_all_heads)  # (H, D, D)
+
+    query_mean = query_mean.view(4, 8, D, D) 
+    query_mean = query_mean.permute(1, 0, 2, 3)
+    query_mean = query_mean.mean(dim=1)
 
 
     KT_K_all_heads = []
@@ -114,44 +121,73 @@ def permute_adjacent_pairs(Q):
     return Q_permuted
 
 def batch_matrix_sqrt_and_inv_sqrt(H, eps=1e-10):
-    eigvals, eigvecs = torch.linalg.eigh(H)  # (H, D), (H, D, D)
+    # eigvals, eigvecs = torch.linalg.eigh(H)  # (H, D), (H, D, D)
 
-    sqrt_vals = torch.sqrt(torch.clamp(eigvals, min=eps))
-    inv_sqrt_vals = 1.0 / sqrt_vals
+    # sqrt_vals = torch.sqrt(torch.clamp(eigvals, min=eps))
+    # inv_sqrt_vals = 1.0 / sqrt_vals
 
-    H_sqrt = eigvecs @ torch.diag_embed(sqrt_vals) @ eigvecs.transpose(-1, -2)
-    H_inv_sqrt = eigvecs @ torch.diag_embed(inv_sqrt_vals) @ eigvecs.transpose(-1, -2)
-
-    return H_sqrt, H_inv_sqrt
+    # H_sqrt = eigvecs @ torch.diag_embed(sqrt_vals) @ eigvecs.transpose(-1, -2)
+    # H_inv_sqrt = eigvecs @ torch.diag_embed(inv_sqrt_vals) @ eigvecs.transpose(-1, -2)
+    L = torch.linalg.cholesky(H.cpu())   # (H, D, D), lower triangular
+    
+    # Square root: take L (triangular square root)
+    H_sqrt = L
+    
+    # Inverse square root: L^{-T}
+    # torch.cholesky_inverse gives H^{-1}, but we want H^{-1/2}
+    # So directly compute L^{-T}
+    L_inv = torch.inverse(L)           # (H, D, D)
+    H_invsqrt = L_inv #.transpose(-1, -2)
+    
+    return H_sqrt, H_invsqrt
 
 def incoherence_processing(Q,K, H, K_mean=None):
 
     B, H_q, T, D = Q.shape
     B, H_k, T, D = K.shape
 
-    M = (torch.tensor(hadamard(D), dtype=torch.float32) / math.sqrt(D)).to(Q.device)
-    S = (torch.randn(D) > 0).to(torch.float32) * 2 - 1
-    S=S.to(Q.device)
+    # M = (torch.tensor(hadamard(D), dtype=torch.float32) / math.sqrt(D)).to(Q.device)
+
+    M=torch.tensor(ortho_group.rvs(dim=D), dtype=torch.float32).to(Q.device)
+    reg_scale=1e-2
+
+    H.div_(H.diagonal(dim1=-2, dim2=-1).mean(dim=-1).unsqueeze(-1).unsqueeze(-1))
+
+    H.diagonal(dim1=-2, dim2=-1).add_(reg_scale)
+
+
+
+    # S = (torch.randn(D) > 0).to(torch.float32) * 2 - 1
+    # S=S.to(Q.device)
     
-    scale1 = S.view(1, 1, 1, D)
+    # scale1 = S.view(1, 1, 1, D)
     C_sqrt, C_inv_sqrt=batch_matrix_sqrt_and_inv_sqrt(H)
 
+    C_sqrt=C_sqrt.to(Q.device)
+    C_inv_sqrt=C_inv_sqrt.to(Q.device)
 
     
-    # Q = torch.einsum("bhtd,hde->bhte", Q, C_inv_sqrt)
-    Q =  Q* scale1.squeeze(-1)  # (B, H, T, D)
+
+    C_inv_sqrt=C_inv_sqrt.repeat(4, 1, 1)
+
+    # for i in range(4):
+    #     print(C_inv_sqrt[i,:,:]@C_sqrt)
+    # raise
+    
+    Q = torch.einsum("bhtd,hde->bhte", Q, C_inv_sqrt)
+    # Q =  Q* scale1.squeeze(-1)  # (B, H, T, D)
     Q = torch.einsum("bhtd,de->bhte", Q, M)
 
 
     
-    # K = torch.einsum("bhtd,hde->bhte", K, C_sqrt)
-    K =  K* scale1.squeeze(-1)  # (B, H, T, D)
+    K = torch.einsum("bhtd,hde->bhte", K, C_sqrt)
+    # K =  K* scale1.squeeze(-1)  # (B, H, T, D)
     K = torch.einsum("bhtd,de->bhte", K, M)
 
     if K_mean is not None:
 
         # K_mean = torch.einsum("bhtd,hde->bhte", K_mean, C_sqrt)
-        K_mean =  K_mean* scale1.squeeze(-1)  # (B, H, T, D)
+        # K_mean =  K_mean* scale1.squeeze(-1)  # (B, H, T, D)
         K_mean = torch.einsum("bhtd,de->bhte", K_mean, M)
 
     return Q, K, K_mean
@@ -574,11 +610,7 @@ def llama_fp4_attention_forward(
             f"IP={self.ip}"
         )
 
-        self.qk_mean_averages_before_rope=torch.load("qk_mean_averages_before_rope.pt")
-        print("Loaded qk_mean_averages_before_rope.pt")
-        self.qk_mean_averages_after_rope=torch.load("qk_mean_averages_after_rope.pt")
-        print("Loaded qk_mean_averages_after_rope.pt")
-        self.q_hessian=torch.load("qk_hessians.pt")
+
 
 
     
@@ -610,9 +642,16 @@ def llama_fp4_attention_forward(
         self.quantize_V = ('V' in letters)
         self.quantize_P = ('P' in letters)
 
+
+        self.qk_mean_averages_before_rope=torch.load("qk_mean_averages_before_rope.pt")
+        print("Loaded qk_mean_averages_before_rope.pt")
+        self.qk_mean_averages_after_rope=torch.load("qk_mean_averages_after_rope.pt")
+        print("Loaded qk_mean_averages_after_rope.pt")
+        self.q_hessian=torch.load("qk_hessians.pt")
+
     key_mean=torch.zeros_like(key_states).to(key_states.device)
 
-    if self.layer_idx != 0 and self.mean_before_rope:
+    if self.layer_idx != 0 and self.mean_before_rope and self.quantize:
         query_states_uq, key_states_uq = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
 
@@ -661,26 +700,24 @@ def llama_fp4_attention_forward(
             key_states=key_states.to(torch.float32)
             key_mean=key_mean.to(torch.float32)
 
-            key_states = repeat_kv(key_states, self.num_key_value_groups)
-            key_mean = repeat_kv(key_mean, self.num_key_value_groups)
+
+            hessian=self.q_hessian[f'layer_{self.layer_idx}']['q_mean_avg'].to(query_states.device).to(torch.float32)
+            # QT_Q_all_heads=[]
+            # B, H, T, D = query_states.shape
+            # Q=query_states
+            # for h in range(H):
+            #     Q_h = Q[:, h, :, :]         # (B, T, D)
+            #     Q_h = Q_h.reshape(B * T, D) # (B*T, D)
+            #     QT_Q = Q_h.T @ Q_h          # (D, D)
+            #     QT_Q_all_heads.append(QT_Q)
+
+            # hessian = torch.stack(QT_Q_all_heads).to(torch.float32)  # (H, D, D)
 
 
-            # hessian=self.q_hessian[f'layer_{self.layer_idx}']['q_mean_avg'].to(query_states.device).to(torch.float32)
-            QT_Q_all_heads=[]
-            B, H, T, D = query_states.shape
-            Q=query_states
-            for h in range(H):
-                Q_h = Q[:, h, :, :]         # (B, T, D)
-                Q_h = Q_h.reshape(B * T, D) # (B*T, D)
-                QT_Q = Q_h.T @ Q_h          # (D, D)
-                QT_Q_all_heads.append(QT_Q)
+            # print((query_states@(key_states_repeated.transpose(2, 3)))[0,0,0:3,0:16])
 
-            hessian = torch.stack(QT_Q_all_heads).to(torch.float32)  # (H, D, D)
+            query_states, key_states, key_mean= incoherence_processing(query_states, key_states, hessian.clone(), key_mean)
 
-
-            # print((query_states@(key_states.transpose(2, 3)))[0,0,0:3,0:16])
-
-            query_states, key_states, key_mean= incoherence_processing(query_states, key_states, hessian, key_mean)
 
         if self.quantize_Q:
             Qq_hi, Qq_lo, Qs_hi, Qs_lo, Q_mean, perm = quantize_q(self, query_states, dual=True, search=self.use_Q_search, zero_point=self.zero_point_Q)
