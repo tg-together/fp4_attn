@@ -174,13 +174,13 @@ def incoherence_processing(Q,K, H, K_mean=None):
     #     print(C_inv_sqrt[i,:,:]@C_sqrt)
     # raise
     
-    Q = torch.einsum("bhtd,hde->bhte", Q, C_inv_sqrt)
+    # Q = torch.einsum("bhtd,hde->bhte", Q, C_inv_sqrt)
     # Q =  Q* scale1.squeeze(-1)  # (B, H, T, D)
     Q = torch.einsum("bhtd,de->bhte", Q, M)
 
 
     
-    K = torch.einsum("bhtd,hde->bhte", K, C_sqrt)
+    # K = torch.einsum("bhtd,hde->bhte", K, C_sqrt)
     # K =  K* scale1.squeeze(-1)  # (B, H, T, D)
     K = torch.einsum("bhtd,de->bhte", K, M)
 
@@ -581,19 +581,17 @@ def llama_fp4_attention_forward(
         self.dequant_dtype = self.q_proj.weight.dtype
         
         # Get environment variables for configuration
-        self.use_Q_search = os.getenv('FP4_USE_Q_SEARCH', 'true').lower() == 'true'
-        self.use_P_search = os.getenv('FP4_USE_P_SEARCH', 'true').lower() == 'true'
+        self.use_Q_search = os.getenv('FP4_USE_Q_SEARCH', 'false').lower() == 'true'
+        self.use_P_search = os.getenv('FP4_USE_P_SEARCH', 'false').lower() == 'true'
         self.use_KV_search = os.getenv('FP4_USE_KV_SEARCH', 'true').lower() == 'true'
         self.use_dual_quant_q = os.getenv('FP4_USE_DUAL_QUANT_Q', 'true').lower() == 'true'
         self.use_dual_quant_attn = os.getenv('FP4_USE_DUAL_QUANT_ATTN', 'true').lower() == 'true'
         self.zero_point_KV  = os.getenv('ZERO_POINT_KV') and os.getenv('ZERO_POINT_KV').lower()
-        self.zero_point_Q  = os.getenv("ZERO_POINT_Q", "mean")
-        if self.zero_point_Q == "None":
-            self.zero_point_Q = None
+        self.zero_point_Q  = os.getenv("ZERO_POINT_Q") and os.getenv("ZERO_POINT_Q").lower()
         self.with_shift = os.getenv('SHIFTED_SM', 'false').lower() == 'true'
         self.mean_before_rope = os.getenv('MEAN_BEFORE_ROPE', 'false').lower() == 'true'
         self.fp_mask = os.getenv('FP_MASK', 'true').lower() == 'true'
-        self.ip = os.getenv('IP', 'false').lower() == 'true'
+        self.ip = os.getenv('IP', 'true').lower() == 'true'
         # Initialize FP4Quantizer with appropriate parameters
         self.fp4_quantizer = FP4Quantizer(global_sf_max=1536, device=self.q_proj.weight.device)
         # Debug: print env var-driven configuration
@@ -720,7 +718,7 @@ def llama_fp4_attention_forward(
 
 
         if self.quantize_Q:
-            Qq_hi, Qq_lo, Qs_hi, Qs_lo, Q_mean, perm = quantize_q(self, query_states, dual=True, search=self.use_Q_search, zero_point=self.zero_point_Q)
+            Qq_hi, Qq_lo, Qs_hi, Qs_lo, Q_mean, perm = quantize_q(self, query_states, dual=self.use_dual_quant_q, search=self.use_Q_search, zero_point=self.zero_point_Q)
             query_states = Qq_hi*Qs_hi + Qq_lo*Qs_lo + Q_mean
             # if self.mean_before_rope:   
             #     query_states=query_states+query_mean
