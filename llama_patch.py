@@ -21,6 +21,7 @@ import math
 import numpy as np
 from scipy.linalg import hadamard
 from scipy.stats import ortho_group
+from kernel.tkfp4_attention_forward import tkfp4_attention_forward
 
 
 
@@ -31,6 +32,11 @@ except ImportError:
     # Fallback for older versions
     class TransformersKwargs:
         pass
+
+ATTENTION_IMPLEMENTATIONS = {
+    "eager": eager_attention_forward,
+    "tkfp4": tkfp4_attention_forward,
+}
 
 
 def batch_matrix_sqrt_and_inv_sqrt(H, eps=1e-10):
@@ -220,6 +226,10 @@ def eager_attention_forward(
     dropout: float = 0.0,
     **kwargs: Unpack[TransformersKwargs],
 ):
+    query = query.to(torch.float32)
+    key = key.to(torch.float32)
+    value = value.to(torch.float32)
+
     key_states = repeat_kv(key, module.num_key_value_groups)
     value_states = repeat_kv(value, module.num_key_value_groups)
     key_states_uq=repeat_kv(key_uq, module.num_key_value_groups)
@@ -360,21 +370,24 @@ def llama_fp4_attention_forward(
 
     attention_interface: Callable = eager_attention_forward
 
-    self.config._attn_implementation = "eager"
+    # self.config._attn_implementation = "eager"
 
     if self.config._attn_implementation != "eager":
-        attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
+        if self.config._attn_implementation in ATTENTION_IMPLEMENTATIONS:
+            attention_interface = ATTENTION_IMPLEMENTATIONS[self.config._attn_implementation]
+        else:
+            attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
 
-    attn_output, attn_weights = eager_attention_forward(
+    attn_output, attn_weights = attention_interface(
         self,
-        query_states.to(torch.float32),
-        key_states.to(torch.float32),
-        value_states.to(torch.float32),
+        query_states,
+        key_states,
+        value_states,
         query_states_uq,
         key_states_uq,
         attention_mask,
-        dropout=0.0 if not self.training else self.attention_dropout,
         scaling=self.scaling,
+        dropout=0.0 if not self.training else self.attention_dropout,
         **kwargs,
     )
 
