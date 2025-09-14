@@ -3,12 +3,10 @@ from typing import Optional, Unpack
 import torch
 from torch import nn
 
-try:
-    import b200_attn_fp4
-    KERNEL_AVAILABLE = True
-except ImportError:
-    KERNEL_AVAILABLE = False
-    print("⚠️  b200_attn_fp4 kernel not available, using stub implementation")
+import b200_attn_fp4
+
+# remove when gqa is supported
+from transformers.models.llama.modeling_llama import repeat_kv
 
 # Define TransformersKwargs if not available
 try:
@@ -31,24 +29,23 @@ def tkfp4_attention_forward(
     dropout: float = 0.0,
     **kwargs: Unpack[TransformersKwargs],
 ):
-    if KERNEL_AVAILABLE:
-        attn_out = b200_attn_fp4.attention_forward(
-            query,
-            key, 
-            value,
-            query_uq,
-            key_uq,
-        )
-    else:
-        # Stub implementation - return zeros with correct shape
-        # This will fail correctness tests but enables infrastructure testing
-        batch_size, num_heads, seq_len = query_uq.shape[:3]
-        head_dim = query_uq.shape[-1]
-        attn_out = torch.zeros(
-            batch_size, seq_len, num_heads * head_dim,
-            device=query_uq.device, 
-            dtype=query_uq.dtype
-        )
+
+    # update as kernel interface changes
+    _query = query.to(torch.bfloat16).contiguous()
+    _key = key.to(torch.bfloat16).contiguous()
+    _value = value.to(torch.bfloat16).contiguous()
+    _key = repeat_kv(key, module.num_key_value_groups)
+    _value = repeat_kv(value, module.num_key_value_groups)
+
+    l = torch.empty((_query.shape[0], _query.shape[1], 1, _query.shape[2]), dtype=torch.float32, device=query.device)
+    o = torch.empty_like(_query)
+    b200_attn_fp4.fwd_attend_ker_128_noncausal(
+        _query,
+        _key, 
+        _value,
+        l,
+        o,
+    )
 
     # no attn_weights returned from kernel
-    return attn_out, None
+    return o, None
