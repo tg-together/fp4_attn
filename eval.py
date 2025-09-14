@@ -12,7 +12,7 @@ import socket
 from datetime import datetime, timedelta
 import logging
 import numpy as np
-
+import os
 llama_patch.collect_qkv = collect_qkv
 llama_patch.collect_qkv_diff = collect_qkv_diff
 
@@ -126,7 +126,7 @@ def calculate_perplexity(model, tasks, num_samples=None, device="auto", max_leng
         "model_args": f"pretrained={model},max_length={max_length},trust_remote_code=True",
         "tasks": tasks,
         "num_fewshot": 0,
-        "batch_size": 20,
+        "batch_size":int(os.environ.get("BATCH_SIZE", 32)),
         "device": device,
         "confirm_run_unsafe_code":True
     }
@@ -135,9 +135,11 @@ def calculate_perplexity(model, tasks, num_samples=None, device="auto", max_leng
     if num_samples:
         base_args["limit"] = num_samples
     
-    # Merge with additional eval arguments
-    base_args.update(eval_kwargs)
-    
+    # Merge with additional eval arguments, but filter out output_path since simple_evaluate doesn't accept it
+    filtered_eval_kwargs = {k: v for k, v in eval_kwargs.items() if k != 'output_path'}
+    base_args.update(filtered_eval_kwargs)
+
+
     results = simple_evaluate(**base_args)
     return results
 
@@ -153,6 +155,7 @@ def parse_arguments():
     parser.add_argument("--quantize", type=str, default="", help="Selective FP4 quantization; subset of 'QKVP'")
     parser.add_argument("--tag", default="", help="Tag to append to filenames")
     parser.add_argument("--task", nargs='+', default=["pile_10k", "gsm8k"], help="Task(s) to evaluate (can specify multiple)")
+    parser.add_argument("--log_samples", action="store_true", help="Log individual sample results")
     
     # Parse known args to capture additional eval arguments
     args, unknown_args = parser.parse_known_args()
@@ -211,6 +214,10 @@ def patch_attention():
 
 def main():
     args, eval_kwargs = parse_arguments()
+
+    # Handle sample logging arguments
+    if args.log_samples:
+        eval_kwargs["log_samples"] = True
 
     print("=" * 50)
     print("RUNNING WITH ARGUMENTS:")
@@ -279,8 +286,17 @@ def main():
         if args.output:
             output_filename = f"{args.output}_{args.tag}.json" if args.tag else args.output
             with open(output_filename, 'w') as f:
-                json.dump(results, f, indent=2)
-    
+                json.dump(results, f, indent=2, default=str)
+
+    # Print information about sample logs if enabled
+    if args.log_samples:
+        print("\n" + "="*60)
+        print("SAMPLE LOGGING ENABLED:")
+        print("="*60)
+        print("Sample logs will be handled by lm-evaluation-harness internally")
+        print("Use --output filename.json to save aggregated results")
+        print("="*60)
+
     if args.visualize:
         # Create a combined tag that includes both the original tag and task names
         task_str = "_".join(args.task)
