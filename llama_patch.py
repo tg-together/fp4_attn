@@ -97,15 +97,15 @@ def incoherence_processing(Q,K, H, K_mean=None):
     C_inv_sqrt=C_inv_sqrt.to(Q.device)
     C_inv_sqrt=C_inv_sqrt.repeat_interleave(dim=0, repeats=H_q//H_k)
 
-    # Q = torch.einsum("bhtd,hde->bhte", Q, C_inv_sqrt)
+    Q = torch.einsum("bhtd,hde->bhte", Q, C_inv_sqrt)
     Q = torch.einsum("bhtd,de->bhte", Q, M)
 
-    # K = torch.einsum("bhtd,hed->bhte", K, C_sqrt)
+    K = torch.einsum("bhtd,hed->bhte", K, C_sqrt)
     K = torch.einsum("bhtd,de->bhte", K, M)
 
     if K_mean is not None:
 
-        # K_mean = torch.einsum("bhtd,hde->bhte", K_mean, C_sqrt)
+        K_mean = torch.einsum("bhtd,hed->bhte", K_mean, C_sqrt)
         K_mean = torch.einsum("bhtd,de->bhte", K_mean, M)
 
     return Q, K, K_mean
@@ -307,7 +307,7 @@ def llama_fp4_attention_forward(
         self.fp_mask = os.getenv('FP_MASK', 'true').lower() == 'true'
         self.ip = os.getenv('IP', 'true').lower() == 'true'
         self.qk_mean_averages_before_rope=torch.load("qk_mean_averages_before_rope.pt")
-        self.q_hessian=torch.load("qk_hessians.pt")
+        self.q_hessian=torch.load("q_hessians.pt")
         # Initialize FP4Quantizer with appropriate parameters
         self.fp4_quantizer = FP4Quantizer(global_sf_max=1536, device=self.q_proj.weight.device)
         # Debug: print env var-driven configuration
