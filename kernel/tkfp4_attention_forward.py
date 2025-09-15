@@ -34,8 +34,8 @@ def tkfp4_attention_forward(
     _query = query.to(torch.bfloat16).contiguous()
     _key = key.to(torch.bfloat16).contiguous()
     _value = value.to(torch.bfloat16).contiguous()
-    _key = repeat_kv(key, module.num_key_value_groups)
-    _value = repeat_kv(value, module.num_key_value_groups)
+    # _key = repeat_kv(key, module.num_key_value_groups).contiguous()
+    # _value = repeat_kv(value, module.num_key_value_groups).contiguous()
 
     l = torch.empty((_query.shape[0], _query.shape[1], 1, _query.shape[2]), dtype=torch.float32, device=query.device)
     o = torch.empty_like(_query)
@@ -46,6 +46,8 @@ def tkfp4_attention_forward(
         l,
         o,
     )
+
+    o = o.transpose(1, 2).contiguous()
 
     # no attn_weights returned from kernel
     return o, None

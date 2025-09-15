@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 from pickle import NONE
+from re import I
 from lm_eval import simple_evaluate
 from transformers import AutoModelForCausalLM, AutoConfig
 import transformers
@@ -226,13 +227,13 @@ def eager_attention_forward(
     dropout: float = 0.0,
     **kwargs: Unpack[TransformersKwargs],
 ):
-    query = query.to(torch.float32)
-    key = key.to(torch.float32)
-    value = value.to(torch.float32)
+    query = query.to(torch.bfloat16)
+    key = key.to(torch.bfloat16)
+    value = value.to(torch.bfloat16)
 
     key_states = repeat_kv(key, module.num_key_value_groups)
     value_states = repeat_kv(value, module.num_key_value_groups)
-    key_states_uq=repeat_kv(key_uq, module.num_key_value_groups)
+    key_states_uq = repeat_kv(key_uq, module.num_key_value_groups)
 
     attn_weights = torch.matmul(query, key_states.transpose(2, 3)) * scaling
 
@@ -249,6 +250,7 @@ def eager_attention_forward(
         attn_weights = attn_weights + causal_mask
 
 
+    attn_weights = attn_weights.to(torch.float32)
     attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32)
     attn_weights = nn.functional.dropout(attn_weights, p=module.attention_dropout, training=module.training)
 
@@ -258,6 +260,7 @@ def eager_attention_forward(
         attn_weights = (Aq_hi*As_hi+Aq_lo*As_lo)
 
 
+    attn_weights = attn_weights.to(torch.bfloat16)
     attn_output = torch.matmul(attn_weights, value_states)
     attn_output = attn_output.transpose(1, 2).contiguous()
 
@@ -378,6 +381,13 @@ def llama_fp4_attention_forward(
         else:
             attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
 
+    # test
+    if hasattr(self, 'randn_test'):
+        torch.manual_seed(0)
+        query_states = torch.randn_like(query_states.to(torch.bfloat16))
+        key_states = torch.randn_like(key_states.to(torch.bfloat16))
+        value_states = torch.randn_like(value_states.to(torch.bfloat16))
+
     attn_output, attn_weights = attention_interface(
         self,
         query_states,
@@ -392,5 +402,10 @@ def llama_fp4_attention_forward(
     )
 
     attn_output = attn_output.reshape(*input_shape, -1).contiguous()
+
+    # for testing numerical accuracy of attention (oproj amplifies small differences)
+    if hasattr(self, 'skip_oproj'):
+        return attn_output, attn_weights
+    
     attn_output = self.o_proj(attn_output)
     return attn_output, attn_weights

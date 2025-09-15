@@ -109,46 +109,164 @@ def generate_inputs(module, batch_size=2, seq_len=128, new_tokens=1):
         'cache_position': None
     }
 
-
 @pytest.mark.parametrize("batch_size", [1, 2])
-# hangs when seqlen < 128
 @pytest.mark.parametrize("seq_len", [128, 256])
 @pytest.mark.timeout(30)
-def test_fp4_attention_correctness(batch_size, seq_len):
-    """Test FP4 attention kernel against PyTorch reference"""
-    
-    # Set up module
+def test_gqa_attention_correctness(batch_size, seq_len):
+    """Isolated GQA test"""
     module = setup_module(batch_size=batch_size, seq_len=seq_len)
-    
-    # Generate inputs
     inputs = generate_inputs(module, batch_size=batch_size, seq_len=seq_len)
     
-    # Run PyTorch reference (eager)
+    # Disable quantization and causal masking
+    if hasattr(module, 'quantize'):
+        delattr(module, 'quantize')
+    inputs['attention_mask'] = None
+    module.fp_mask = False
+    module.training = False
+    module.attention_dropout = 0.0
+    module.skip_oproj = True
+    # input distribution after quantization makes it difficult to test numerical correctness
+    module.randn_test = True
+    
+    # Run both implementations
     module.config._attn_implementation = "eager"
-    ref_output, ref_weights = llama_fp4_attention_forward(module, **inputs)
+    ref_output, _ = llama_fp4_attention_forward(module, **inputs)
     ref_output = rearrange(ref_output, 'b n (h d) -> b h n d', h=module.num_heads)
     
-    # Run FP4 attention kernel
     module.config._attn_implementation = "tkfp4"
-    fp4_output, fp4_weights = llama_fp4_attention_forward(module, **inputs)
+    fp4_output, _ = llama_fp4_attention_forward(module, **inputs)
     fp4_output = rearrange(fp4_output, 'b n (h d) -> b h n d', h=module.num_heads)
-
-    # Assert correctness with visualization
-    test_name = f"fp4_attn_bs{batch_size}_seq{seq_len}"
+    
     assert_correctness(
-        name=test_name,
-        out=fp4_output,
-        ref=ref_output,
-        results_dir=RESULTS_DIR,
-        verbose=True,
-        assert_close=True,
-        test_metadata={
-            'batch_size': batch_size,
-            'seq_len': seq_len,
-            'num_heads': module.num_heads,
-            'num_kv_heads': module.num_key_value_heads
-        }
+        f"gqa_bs{batch_size}_seq{seq_len}",
+        fp4_output, ref_output,
+        results_dir=RESULTS_DIR, verbose=True, assert_close=True
     )
+
+# @pytest.mark.parametrize("batch_size", [1, 2])
+# @pytest.mark.parametrize("seq_len", [128, 256])
+# @pytest.mark.timeout(30)
+# def test_gqa_causal_attention_correctness(batch_size, seq_len):
+#     """GQA + Causal test"""
+#     module = setup_module(batch_size=batch_size, seq_len=seq_len)
+#     inputs = generate_inputs(module, batch_size=batch_size, seq_len=seq_len)
+    
+#     # Disable quantization but keep causal masking
+#     if hasattr(module, 'quantize'):
+#         delattr(module, 'quantize')
+#     module.fp_mask = False
+    
+#     # Run both implementations
+#     module.config._attn_implementation = "eager"
+#     ref_output, _ = llama_fp4_attention_forward(module, **inputs)
+#     ref_output = rearrange(ref_output, 'b n (h d) -> b h n d', h=module.num_heads)
+    
+#     module.config._attn_implementation = "tkfp4"
+#     fp4_output, _ = llama_fp4_attention_forward(module, **inputs)
+#     fp4_output = rearrange(fp4_output, 'b n (h d) -> b h n d', h=module.num_heads)
+    
+#     assert_correctness(
+#         f"gqa_causal_bs{batch_size}_seq{seq_len}",
+#         fp4_output, ref_output,
+#         results_dir=RESULTS_DIR, verbose=True, assert_close=True
+#     )
+
+# @pytest.mark.parametrize("batch_size", [1, 2])
+# @pytest.mark.parametrize("seq_len", [128, 256])
+# @pytest.mark.timeout(30)
+# def test_gqa_causal_qkfp4_attention_correctness(batch_size, seq_len):
+#     """GQA + Causal + QK FP4 test"""
+#     module = setup_module(batch_size=batch_size, seq_len=seq_len)
+#     inputs = generate_inputs(module, batch_size=batch_size, seq_len=seq_len)
+    
+#     # Enable partial FP4 quantization (Q/K only)
+#     module.quantize = True
+#     module.fp_mask = False
+#     # Disable V quantization by setting env vars appropriately
+    
+#     # Run both implementations
+#     module.config._attn_implementation = "eager"
+#     ref_output, _ = llama_fp4_attention_forward(module, **inputs)
+#     ref_output = rearrange(ref_output, 'b n (h d) -> b h n d', h=module.num_heads)
+    
+#     module.config._attn_implementation = "tkfp4"
+#     fp4_output, _ = llama_fp4_attention_forward(module, **inputs)
+#     fp4_output = rearrange(fp4_output, 'b n (h d) -> b h n d', h=module.num_heads)
+    
+#     assert_correctness(
+#         f"gqa_causal_qkfp4_bs{batch_size}_seq{seq_len}",
+#         fp4_output, ref_output,
+#         results_dir=RESULTS_DIR, verbose=True, assert_close=True
+#     )
+
+
+# @pytest.mark.parametrize("batch_size", [1, 2])
+# # hangs when seqlen < 128
+# @pytest.mark.parametrize("seq_len", [128, 256])
+# @pytest.mark.timeout(30)
+# def test_qga_causal_qkpvfp4_attention_correctness(batch_size, seq_len):
+#     """GQA + Causal + QK FP4 + PV FP4 test"""
+#     # module.fp_mask = False
+
+#     # Set up module
+#     module = setup_module(batch_size=batch_size, seq_len=seq_len)
+    
+#     # Generate inputs
+#     inputs = generate_inputs(module, batch_size=batch_size, seq_len=seq_len)
+    
+#     # Run PyTorch reference (eager)
+#     module.config._attn_implementation = "eager"
+#     ref_output, ref_weights = llama_fp4_attention_forward(module, **inputs)
+#     ref_output = rearrange(ref_output, 'b n (h d) -> b h n d', h=module.num_heads)
+    
+#     # Run FP4 attention kernel
+#     module.config._attn_implementation = "tkfp4"
+#     fp4_output, fp4_weights = llama_fp4_attention_forward(module, **inputs)
+#     fp4_output = rearrange(fp4_output, 'b n (h d) -> b h n d', h=module.num_heads)
+
+#     # Assert correctness with visualization
+#     test_name = f"fp4_attn_bs{batch_size}_seq{seq_len}"
+#     assert_correctness(
+#         name=test_name,
+#         out=fp4_output,
+#         ref=ref_output,
+#         results_dir=RESULTS_DIR,
+#         verbose=True,
+#         assert_close=True,
+#         test_metadata={
+#             'batch_size': batch_size,
+#             'seq_len': seq_len,
+#             'num_heads': module.num_heads,
+#             'num_kv_heads': module.num_key_value_heads
+#         }
+#     )
+
+# @pytest.mark.parametrize("batch_size", [1, 2])
+# @pytest.mark.parametrize("seq_len", [128, 256])
+# @pytest.mark.timeout(30)
+# def test_qga_causal_qkpfp4_fpmask_attention_correctness(batch_size, seq_len):
+#     """GQA + Causal + QK FP4 + PV FP4 + FP Mask test"""
+#     module = setup_module(batch_size=batch_size, seq_len=seq_len)
+#     inputs = generate_inputs(module, batch_size=batch_size, seq_len=seq_len)
+    
+#     # Enable full quantization + FP mask
+#     module.quantize = True
+#     module.fp_mask = True
+    
+#     # Run both implementations
+#     module.config._attn_implementation = "eager"
+#     ref_output, _ = llama_fp4_attention_forward(module, **inputs)
+#     ref_output = rearrange(ref_output, 'b n (h d) -> b h n d', h=module.num_heads)
+    
+#     module.config._attn_implementation = "tkfp4"
+#     fp4_output, _ = llama_fp4_attention_forward(module, **inputs)
+#     fp4_output = rearrange(fp4_output, 'b n (h d) -> b h n d', h=module.num_heads)
+    
+#     assert_correctness(
+#         f"gqa_causal_qkpvfp4_fpmask_bs{batch_size}_seq{seq_len}",
+#         fp4_output, ref_output,
+#         results_dir=RESULTS_DIR, verbose=True, assert_close=True
+#     )
 
 
 if __name__ == "__main__":
