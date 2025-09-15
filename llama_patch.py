@@ -84,7 +84,7 @@ def incoherence_processing(Q,K, H, K_mean=None):
     B, H_k, T, D = K.shape
 
 
-    M=torch.tensor(ortho_group.rvs(dim=D), dtype=torch.float32).to(Q.device)
+    M=torch.tensor(ortho_group.rvs(dim=D), dtype=torch.float64).to(Q.device)
     reg_scale=1e-2
 
     H.div_(H.diagonal(dim1=-2, dim2=-1).mean(dim=-1).unsqueeze(-1).unsqueeze(-1))
@@ -366,14 +366,9 @@ def llama_fp4_attention_forward(
 
 
         if self.ip:
-            query_states=query_states.to(torch.float32)
-            key_states=key_states.to(torch.float32)
-            key_mean=key_mean.to(torch.float32)
 
-
-            hessian=self.q_hessian[f'layer_{self.layer_idx}']['q_hessian'].to(query_states.device).to(torch.float32)
-
-            query_states, key_states, key_mean= incoherence_processing(query_states, key_states, hessian.clone(), key_mean)
+            hessian=self.q_hessian[f'layer_{self.layer_idx}']['q_hessian'].to(query_states.device)
+            query_states, key_states, key_mean= incoherence_processing(query_states.to(torch.float64), key_states.to(torch.float64), hessian.to(torch.float64), key_mean.to(torch.float64))
 
 
 
