@@ -226,7 +226,79 @@ def block_mask_with_first_block(N, m):
     
     return (mask_pad | mask_first)[:N, :N]             
 
+@torch.no_grad()
+def _causal_block_mask(q_start, q_end, k_start, k_end, device):
+    qi = torch.arange(q_start, q_end, device=device)[:, None]
+    ki = torch.arange(k_start, k_end, device=device)[None, :]
+    return ki <= qi
 
+def flash_style_attention(
+    module: nn.Module,
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    q_uq: torch.Tensor,
+    k_uq: torch.Tensor,
+    attn_mask=None,        # additive mask broadcastable to [B,H,Q,K], entries 0 or -inf
+    causal=False,
+    block_q: int = 128,
+    block_k: int = 256,
+):
+    if (attn_mask is not None) and (not torch.is_tensor(attn_mask)):
+        raise TypeError(f"attn_mask must be a Tensor or None, got {type(attn_mask)}")
+    assert q.ndim == k.ndim == v.ndim == 4
+    B, H, Qlen, D  = q.shape
+    _, _, Klen, Dk = k.shape
+    _, _, Kv,  Dv  = v.shape
+    assert D == Dk and Klen == Kv
+
+    if k.shape[1]!=q.shape[1]:
+        k = repeat_kv(k, module.num_key_value_groups)
+        k_uq = repeat_kv(k_uq, module.num_key_value_groups)
+    if v.shape[1]!=q.shape[1]:
+        v = repeat_kv(v, module.num_key_value_groups)
+
+    compute_dtype = torch.float32 
+    scale = 1.0 / math.sqrt(D)
+    out = torch.empty((B, H, Qlen, Dv), dtype=q.dtype, device=q.device)
+
+    for q_start in range(0, Qlen, block_q):
+        q_end = min(q_start + block_q, Qlen)
+        q_blk = q[:, :, q_start:q_end, :].to(compute_dtype)
+
+        m   = torch.full((B, H, q_end - q_start, 1), -float('inf'), dtype=compute_dtype, device=q.device)
+        l   = torch.zeros((B, H, q_end - q_start, 1), dtype=compute_dtype, device=q.device)
+        acc = torch.zeros((B, H, q_end - q_start, Dv), dtype=compute_dtype, device=q.device)
+
+        for k_start in range(0, Klen, block_k):
+            k_end = min(k_start + block_k, Klen)
+            k_blk = k[:, :, k_start:k_end, :].to(compute_dtype)
+            v_blk = v[:, :, k_start:k_end, :].to(compute_dtype)
+
+            scores = torch.einsum("bhqd,bhkd->bhqk", q_blk, k_blk) * scale  # [B,H,qb,kb]
+
+            if causal:
+                keep = _causal_block_mask(q_start, q_end, k_start, k_end, q.device)  # [qb,kb]
+                scores = scores.masked_fill(~keep[None, None, :, :], float("-inf"))
+
+            if attn_mask is not None:
+                scores = scores + attn_mask[:, :, q_start:q_end, k_start:k_end]
+
+            m_block, _ = torch.max(scores, dim=-1, keepdim=True)
+            m_new = torch.maximum(m, m_block)
+            exp_scale = torch.exp(m - m_new)
+
+            p = torch.exp(scores - m_new)
+            l   = exp_scale * l   + torch.sum(p, dim=-1, keepdim=True)
+            acc = exp_scale * acc + torch.einsum("bhqk,bhkd->bhqd", p, v_blk)
+            m = m_new
+
+            del scores, p, m_block, m_new, exp_scale, k_blk, v_blk
+
+        out[:, :, q_start:q_end, :] = (acc / l).to(q.dtype)
+        del q_blk, m, l, acc
+
+    return out.transpose(1, 2).contiguous().to(torch.bfloat16),None
 
 
 def eager_attention_forward(
@@ -405,20 +477,28 @@ def llama_fp4_attention_forward(
     if self.config._attn_implementation != "eager":
         attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
 
-    attn_output, attn_weights = eager_attention_forward(
+    # attn_output, attn_weights = eager_attention_forward(
+    #     self,
+    #     query_states.to(torch.float32),
+    #     key_states.to(torch.float32),
+    #     value_states.to(torch.float32),
+    #     query_states_uq,
+    #     key_states_uq,
+    #     None,
+    #     attention_mask,
+    #     dropout=0.0 if not self.training else self.attention_dropout,
+    #     scaling=self.scaling,
+    #     **kwargs,
+    # )
+    attn_output, attn_weights = flash_style_attention(
         self,
         query_states.to(torch.float32),
         key_states.to(torch.float32),
         value_states.to(torch.float32),
         query_states_uq,
         key_states_uq,
-        None,
-        attention_mask,
-        dropout=0.0 if not self.training else self.attention_dropout,
-        scaling=self.scaling,
-        **kwargs,
+        attn_mask=attention_mask
     )
-
 
 
     attn_output = attn_output.reshape(*input_shape, -1).contiguous()
