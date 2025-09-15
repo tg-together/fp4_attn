@@ -36,14 +36,7 @@ class FP4Quantizer(nn.Module):
         self.one_tensor = torch.tensor(1.0, dtype=dequant_dtype, device=device)
         self.dequant_dtype = dequant_dtype
 
-        # print(f"FP4Quantizer initialized with:")
-        # print(f"block_size: {block_size}")
-        # print(f"float4_e2m1_max: {float4_e2m1_max}")
-        # print(f"global_sf_max: {global_sf_max}")
-        # print(f"dequant_dtype: {dequant_dtype}")
-        # print(f"use_search: {use_search}")
-
-    
+ 
 
     def get_reciprocal(self, x):
         """Safe reciprocal that handles zeros."""
@@ -61,12 +54,9 @@ class FP4Quantizer(nn.Module):
 
         if self.global_sf_max is not None:
 
-            if x.dim() == 3:
-                global_sf = torch.max(abs(x), dim=2, keepdim=True)[0].to(torch.float32)
-            elif x.dim() == 2:
-                global_sf = torch.max(abs(x), dim=1, keepdim=True)[0].to(torch.float32)
+    
+            global_sf = torch.max(abs(x), dim=-1, keepdim=True)[0].to(torch.float32)
 
-           
             global_sf = global_sf * self.get_reciprocal(self.global_sf_max)
 
             x=x*self.get_reciprocal(global_sf)
@@ -141,7 +131,7 @@ class FP4Quantizer(nn.Module):
 
 
 
-        x_hi_q, scales_hi = self.single_nvfp4(x, search, transpose) #self.single_nvfp4_dequant(q_hi, s_hi, global_sf)
+        x_hi_q, scales_hi = self.single_nvfp4(x, search, transpose) 
         
 
         x_lo_q, scales_lo = self.single_nvfp4(x - x_hi_q*scales_hi, search, transpose)

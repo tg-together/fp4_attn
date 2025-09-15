@@ -17,104 +17,32 @@ llama_patch.collect_qkv = collect_qkv
 llama_patch.collect_qkv_diff = collect_qkv_diff
 
 
-# MAX_NUM_OF_MEM_EVENTS_PER_SNAPSHOT: int = 100000000
-
-# # Make collect_qkv available to llama_patch module
 
 
-# logging.basicConfig(
-#    format="%(levelname)s:%(asctime)s %(message)s",
-#    level=logging.INFO,
-#    datefmt="%Y-%m-%d %H:%M:%S",
-# )
-# logger: logging.Logger = logging.getLogger(__name__)
-# logger.setLevel(level=logging.INFO)
-
-# TIME_FORMAT_STR: str = "%b_%d_%H_%M_%S"
-
-
-# def start_record_memory_history() -> None:
-#    if not torch.cuda.is_available():
-#        logger.info("CUDA unavailable. Not recording memory history")
-#        return
-
-#    logger.info("Starting snapshot record_memory_history")
-#    torch.cuda.memory._record_memory_history(
-#        max_entries=MAX_NUM_OF_MEM_EVENTS_PER_SNAPSHOT
-#    )
-
-# def stop_record_memory_history() -> None:
-#    if not torch.cuda.is_available():
-#        logger.info("CUDA unavailable. Not recording memory history")
-#        return
-
-#    logger.info("Stopping snapshot record_memory_history")
-#    torch.cuda.memory._record_memory_history(enabled=None)
-
-# def export_memory_snapshot() -> None:
-#    if not torch.cuda.is_available():
-#        logger.info("CUDA unavailable. Not exporting memory snapshot")
-#        return
-
-#    # Prefix for file names.
-#    host_name = socket.gethostname()
-#    timestamp = datetime.now().strftime(TIME_FORMAT_STR)
-#    file_prefix = f"{host_name}_{timestamp}"
-
-#    try:
-#        logger.info(f"Saving snapshot to local file: {file_prefix}.pickle")
-#        torch.cuda.memory._dump_snapshot(f"{file_prefix}.pickle")
-#    except Exception as e:
-#        logger.error(f"Failed to capture memory snapshot {e}")
-#        return
-
-
-def print_pile_10k_metrics(metrics, tag="", model="", quantize=False):
-    """Print pile_10k metrics as comma-separated values for Excel paste."""
-    
-    # Extract the metrics we want
-    word_perplexity = metrics.get('word_perplexity,none', 'N/A')
-    byte_perplexity = metrics.get('byte_perplexity,none', 'N/A')
-    bits_per_byte = metrics.get('bits_per_byte,none', 'N/A')
-    
-    # Create a comma-separated line
-    csv_line = f"{tag},{model},{quantize},{word_perplexity},{byte_perplexity},{bits_per_byte}"
-    
-    print("\n" + "="*80)
-    print("PILE_10K METRICS FOR EXCEL:")
-    print("="*80)
-    print("Header: Tag,Model,Quantize,Word_Perplexity,Byte_Perplexity,Bits_Per_Byte")
-    print(f"Data:   {csv_line}")
-    print("="*80)
-    
-    return csv_line
-
-
-def save_qk_mean_averages(tag=""):
-    """Save the running averages of Q and K means per layer.
+def save_q_hessian(tag=""):
+    """Save the running averages of Q Hessian per layer.
     Each mean has shape [1, H, 1, D] where H is the number of heads."""
-    from llama_patch import qk_running_averages
+    from llama_patch import hessian_running_averages
     
-    if not qk_running_averages['counts']:
+    if not hessian_running_averages['counts']:
         print("No Q/K mean averages to save")
         return
     
     # Collect the averages (already computed incrementally)
     averages = {}
-    for layer_idx in sorted(qk_running_averages['counts'].keys()):
-        count = qk_running_averages['counts'][layer_idx]
+    for layer_idx in sorted(hessian_running_averages['counts'].keys()):
+        count = hessian_running_averages['counts'][layer_idx]
         if count > 0:
             averages[f'layer_{layer_idx}'] = {
-                'q_mean_avg': qk_running_averages['q_means'][layer_idx],  # Shape: [1, H_q, 1, D]
-                'k_mean_avg': qk_running_averages['k_means'][layer_idx],  # Shape: [1, H_k, 1, D]
+                'q_mean_avg': hessian_running_averages['q_means'][layer_idx],  # Shape: [1, H_q, 1, D]
                 'num_samples': count
             }
     
     # Save to file using torch.save
-    filename = f"qk_mean_averages_{tag}.pt" if tag else "qk_hessians.pt"
+    filename = f"q_hessians_{tag}.pt" if tag else "q_hessians.pt"
     torch.save(averages, filename)
     
-    print(f"Saved Q/K mean averages to {filename}")
+    print(f"Saved Q Hessian to {filename}")
 
 
 def calculate_perplexity(model, tasks, num_samples=None, device="auto", max_length=2048, **eval_kwargs):
@@ -150,6 +78,7 @@ def parse_arguments():
     parser.add_argument("--output", help="Output JSON file")
     parser.add_argument("--num_samples", type=int, default=None, help="Number of samples to evaluate")
     parser.add_argument("--visualize", action="store_true", help="Enable QKV visualization")
+    parser.add_argument("--record_hessian", action="store_true", help="Record Q Hessian")
     parser.add_argument("--quantize", type=str, default="", help="Selective FP4 quantization; subset of 'QKVP'")
     parser.add_argument("--tag", default="", help="Tag to append to filenames")
     parser.add_argument("--task", nargs='+', default=["pile_10k", "gsm8k"], help="Task(s) to evaluate (can specify multiple)")
@@ -227,6 +156,10 @@ def main():
     llama_patch.quantize_enabled = args.quantize.upper() if isinstance(args.quantize, str) else args.quantize
     llama_patch.visualize = args.visualize
 
+    if args.record_hessian:
+        args.quantize = False
+        llama_fp4_attention_forward.store_hessian = True
+
     if args.visualize:
         llama_fp4_attention_forward.visualize = args.visualize
 
@@ -249,8 +182,8 @@ def main():
                 **eval_kwargs
                 )
         
-        # Save Q/K mean averages after perplexity calculation
-        # save_qk_mean_averages(args.tag)
+        if args.record_hessian:
+            save_q_hessian(args.tag)
         
         # export_memory_snapshot()
         # stop_record_memory_history()

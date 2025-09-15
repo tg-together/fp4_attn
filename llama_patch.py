@@ -68,23 +68,13 @@ def store_hessian(query_states, key_states, layer_idx):
 
 
 def batch_matrix_sqrt_and_inv_sqrt(H, eps=1e-10):
-    # eigvals, eigvecs = torch.linalg.eigh(H)  # (H, D), (H, D, D)
 
-    # sqrt_vals = torch.sqrt(torch.clamp(eigvals, min=eps))
-    # inv_sqrt_vals = 1.0 / sqrt_vals
-
-    # H_sqrt = eigvecs @ torch.diag_embed(sqrt_vals) @ eigvecs.transpose(-1, -2)
-    # H_inv_sqrt = eigvecs @ torch.diag_embed(inv_sqrt_vals) @ eigvecs.transpose(-1, -2)
-    L = torch.linalg.cholesky(H.cpu())   # (H, D, D), lower triangular
+    L = torch.linalg.cholesky(H.cpu())  
     
-    # Square root: take L (triangular square root)
     H_sqrt = L
-    
-    # Inverse square root: L^{-T}
-    # torch.cholesky_inverse gives H^{-1}, but we want H^{-1/2}
-    # So directly compute L^{-T}
-    L_inv = torch.inverse(L)           # (H, D, D)
-    H_invsqrt = L_inv #.transpose(-1, -2)
+
+    L_inv = torch.inverse(L)          
+    H_invsqrt = L_inv 
     
     return H_sqrt, H_invsqrt
 
@@ -93,7 +83,6 @@ def incoherence_processing(Q,K, H, K_mean=None):
     B, H_q, T, D = Q.shape
     B, H_k, T, D = K.shape
 
-    # M = (torch.tensor(hadamard(D), dtype=torch.float32) / math.sqrt(D)).to(Q.device)
 
     M=torch.tensor(ortho_group.rvs(dim=D), dtype=torch.float32).to(Q.device)
     reg_scale=1e-2
@@ -102,39 +91,21 @@ def incoherence_processing(Q,K, H, K_mean=None):
 
     H.diagonal(dim1=-2, dim2=-1).add_(reg_scale)
 
-
-
-    # S = (torch.randn(D) > 0).to(torch.float32) * 2 - 1
-    # S=S.to(Q.device)
-    
-    # scale1 = S.view(1, 1, 1, D)
     C_sqrt, C_inv_sqrt=batch_matrix_sqrt_and_inv_sqrt(H)
 
     C_sqrt=C_sqrt.to(Q.device)
     C_inv_sqrt=C_inv_sqrt.to(Q.device)
+    C_inv_sqrt=C_inv_sqrt.repeat_interleave(dim=0, repeats=H_q//H_k)
 
-    
-
-    C_inv_sqrt=C_inv_sqrt.repeat(4, 1, 1)
-
-    # for i in range(4):
-    #     print(C_inv_sqrt[i,:,:]@C_sqrt)
-    # raise
-    
     # Q = torch.einsum("bhtd,hde->bhte", Q, C_inv_sqrt)
-    # Q =  Q* scale1.squeeze(-1)  # (B, H, T, D)
     Q = torch.einsum("bhtd,de->bhte", Q, M)
 
-
-    
-    # K = torch.einsum("bhtd,hde->bhte", K, C_sqrt)
-    # K =  K* scale1.squeeze(-1)  # (B, H, T, D)
+    # K = torch.einsum("bhtd,hed->bhte", K, C_sqrt)
     K = torch.einsum("bhtd,de->bhte", K, M)
 
     if K_mean is not None:
 
         # K_mean = torch.einsum("bhtd,hde->bhte", K_mean, C_sqrt)
-        # K_mean =  K_mean* scale1.squeeze(-1)  # (B, H, T, D)
         K_mean = torch.einsum("bhtd,de->bhte", K_mean, M)
 
     return Q, K, K_mean
@@ -220,11 +191,6 @@ def quantize_v(module, v_orig):
 
 def quantize_p(module, attn_weights, dual=True):
 
-
-   
-    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32)
-
-    attn_weights = nn.functional.dropout(attn_weights, p=module.attention_dropout, training=module.training)
   
     original_shape = attn_weights.shape
     attn_weights_2d = attn_weights.reshape(-1, attn_weights.shape[-1])
@@ -291,7 +257,7 @@ def eager_attention_forward(
     attn_weights_uq=torch.matmul(query_uq, key_states_uq.transpose(2, 3)) * scaling
 
     if hasattr(module, 'quantize') and module.fp_mask:
-        full_prec_mask=block_mask_with_first_block(key_states.shape[-2], 64).unsqueeze(0).unsqueeze(0).to(key_states.device)   #can change to backward_window_with_first_block or block_mask_with_first_block also
+        full_prec_mask=block_mask_with_first_block(key_states.shape[-2], 64).unsqueeze(0).unsqueeze(0).to(key_states.device) 
 
         attn_weights = torch.where(full_prec_mask, attn_weights_uq, attn_weights) 
 
@@ -303,10 +269,9 @@ def eager_attention_forward(
     if hasattr(module, 'quantize_P') and module.quantize_P == True:
         Aq_hi, Aq_lo, As_hi, As_lo = quantize_p(module, attn_weights, module.use_dual_quant_attn)
         attn_weights = (Aq_hi*As_hi+Aq_lo*As_lo)
-    else:
-
-        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
-        attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+    
+    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
+    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
 
 
 
@@ -334,15 +299,10 @@ def llama_fp4_attention_forward(
         self.quantize = True
         self.dequant_dtype = self.q_proj.weight.dtype
         
-        # Get environment variables for configuration
-        self.use_Q_search = os.getenv('FP4_USE_Q_SEARCH', 'false').lower() == 'true'
-        self.use_P_search = os.getenv('FP4_USE_P_SEARCH', 'false').lower() == 'true'
-        self.use_KV_search = os.getenv('FP4_USE_KV_SEARCH', 'true').lower() == 'true'
+
+
         self.use_dual_quant_q = os.getenv('FP4_USE_DUAL_QUANT_Q', 'true').lower() == 'true'
         self.use_dual_quant_attn = os.getenv('FP4_USE_DUAL_QUANT_ATTN', 'true').lower() == 'true'
-        self.zero_point_KV  = os.getenv('ZERO_POINT_KV') and os.getenv('ZERO_POINT_KV').lower()
-        self.zero_point_Q  = os.getenv("ZERO_POINT_Q") and os.getenv("ZERO_POINT_Q").lower()
-        self.with_shift = os.getenv('SHIFTED_SM', 'false').lower() == 'true'
         self.mean_before_rope = os.getenv('MEAN_BEFORE_ROPE', 'false').lower() == 'true'
         self.fp_mask = os.getenv('FP_MASK', 'true').lower() == 'true'
         self.ip = os.getenv('IP', 'true').lower() == 'true'
@@ -381,42 +341,28 @@ def llama_fp4_attention_forward(
     cos, sin = position_embeddings
 
 
-    key_mean=torch.zeros_like(key_states).to(key_states.device)
-
-    if self.layer_idx != 0 and hasattr(self, 'quantize') and self.quantize and self.mean_before_rope:
-        query_states_uq, key_states_uq = apply_rotary_pos_emb(query_states, key_states, cos, sin)
-
-
-        query_mean=self.qk_mean_averages_before_rope[f'layer_{self.layer_idx}']['q_mean_avg'].to(query_states.device)
-        query_states=query_states-query_mean
-
-        
-        key_mean=self.qk_mean_averages_before_rope[f'layer_{self.layer_idx}']['k_mean_avg'].to(key_states.device)
-        key_states=key_states-key_mean
-
-
-        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
-        query_mean,  key_mean = apply_rotary_pos_emb(query_mean, key_mean, cos, sin)
-
-
-        query_states=query_states_uq
-
-
-        if not hasattr(self, 'quantize_K') or (hasattr(self, 'quantize_K') and not self.quantize_K):
-            key_states=key_states+key_mean.expand_as(key_states)
-
-        
-
-    else:
-        
-        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
-        # compute_and_store_qk_means(query_states, key_states, self.layer_idx)
-        query_states_uq=query_states
-        key_states_uq=key_states
-
-
     
+    query_states_uq, key_states_uq = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+
     if self.layer_idx != 0 and hasattr(self, 'quantize') and self.quantize:
+
+        key_mean=torch.zeros_like(key_states).to(key_states.device)
+
+        if self.mean_before_rope:
+
+            
+            key_mean=self.qk_mean_averages_before_rope[f'layer_{self.layer_idx}']['k_mean_avg'].to(key_states.device)
+            key_states=key_states-key_mean
+
+
+            key_mean, key_states = apply_rotary_pos_emb(key_mean, key_states, cos, sin)
+
+            query_states=query_states_uq
+        
+        else:
+            query_states=query_states_uq.clone()
+            key_states=key_states_uq.clone()
+
 
 
         if self.ip:
@@ -433,20 +379,26 @@ def llama_fp4_attention_forward(
 
         Qq_hi, Qq_lo, Qs_hi, Qs_lo = quantize_q(self, query_states, dual=self.use_dual_quant_q)
         query_states = Qq_hi*Qs_hi + Qq_lo*Qs_lo 
-        # if self.mean_before_rope:   
-        #     query_states=query_states+query_mean
 
 
         Kq, Ks = quantize_k(self, key_states)
         key_states = Kq*Ks 
         if self.mean_before_rope:
-
             key_states=key_states+(key_mean)
 
 
         Vq, Vs = quantize_v(self, value_states)
         value_states = Vq*Vs 
 
+        
+
+    else:
+
+        query_states=query_states_uq.clone()
+        key_states=key_states_uq.clone()
+        key_states=key_states_uq
+        if hasattr(llama_fp4_attention_forward, 'store_hessian') and llama_fp4_attention_forward.store_hessian:
+            store_hessian(query_states, key_states, self.layer_idx)
 
 
     attention_interface: Callable = eager_attention_forward
@@ -458,14 +410,6 @@ def llama_fp4_attention_forward(
 
     if self.config._attn_implementation != "eager":
         attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
-
-
-    if torch.isnan(key_states).any() or torch.isnan(value_states).any() or torch.isnan(query_states).any():
-        print("K nan:", torch.isnan(key_states).any())
-        print("V nan:", torch.isnan(value_states).any())
-        print("Q nan:", torch.isnan(query_states).any())
-        raise
-
 
     attn_output, attn_weights = eager_attention_forward(
         self,
@@ -481,9 +425,7 @@ def llama_fp4_attention_forward(
         **kwargs,
     )
 
-    # print(torch.mean((attn_output_ref-attn_output)**2))
-    # print(torch.mean((attn_weights_ref-attn_weights)**2))
-    # raise
+
 
     attn_output = attn_output.reshape(*input_shape, -1).contiguous()
     attn_output = self.o_proj(attn_output)
