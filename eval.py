@@ -5,17 +5,12 @@ from lm_eval import simple_evaluate
 from transformers import AutoModelForCausalLM, AutoConfig
 import transformers
 import torch
-from visualize import collect_qkv, collect_qkv_diff, save_plots
 import llama_patch
 from llama_patch import llama_fp4_attention_forward
 import socket
 from datetime import datetime, timedelta
 import logging
 import numpy as np
-
-llama_patch.collect_qkv = collect_qkv
-llama_patch.collect_qkv_diff = collect_qkv_diff
-
 
 
 

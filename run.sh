@@ -16,6 +16,6 @@ export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 num_samples=20
 
 
-CUDA_VISIBLE_DEVICES=0 MEAN_BEFORE_ROPE=true python eval.py --device cuda:0 --model meta-llama/Meta-Llama-3-8B --task pile_10k --quantize QKVP --num_samples $num_samples 2>&1 | tee temp.txt
+CUDA_VISIBLE_DEVICES=0 MEAN_BEFORE_ROPE=true python eval.py --device cuda:0 --model meta-llama/Meta-Llama-3-8B --task pile_10k --quantize QKVP --num_samples $num_samples 2>&1 | tee temp.txt &
 
-CUDA_VISIBLE_DEVICES=1  python eval.py --device cuda:1 --model meta-llama/Meta-Llama-3-8B --task pile_10k --num_samples $num_samples 2>&1 | tee temp1.txt
+CUDA_VISIBLE_DEVICES=1  python eval.py --device cuda:1 --model meta-llama/Meta-Llama-3-8B --task pile_10k --num_samples $num_samples 2>&1 | tee temp1.txt &

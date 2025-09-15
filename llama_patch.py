@@ -15,7 +15,6 @@ from transformers.models.llama.modeling_llama import apply_rotary_pos_emb, eager
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.utils import ModelOutput
 from fp4_quant_utils import FP4Quantizer
-from visualize import collect_qkv, collect_qkv_diff
 import time
 import math
 import numpy as np
@@ -105,7 +104,7 @@ def incoherence_processing(Q,K, H, K_mean=None):
 
     if K_mean is not None:
 
-        K_mean = torch.einsum("bhtd,hed->bhte", K_mean, C_sqrt)
+        # K_mean = torch.einsum("bhtd,hed->bhte", K_mean, C_sqrt)
         K_mean = torch.einsum("bhtd,de->bhte", K_mean, M)
 
     return Q, K, K_mean
@@ -256,7 +255,7 @@ def eager_attention_forward(
 
     attn_weights_uq=torch.matmul(query_uq, key_states_uq.transpose(2, 3)) * scaling
 
-    if module.layer_idx != 0 and hasattr(module, 'quantize') and module.fp_mask:
+    if hasattr(module, 'quantize') and module.fp_mask:
         full_prec_mask=block_mask_with_first_block(key_states.shape[-2], 64).unsqueeze(0).unsqueeze(0).to(key_states.device) 
 
         attn_weights = torch.where(full_prec_mask, attn_weights_uq, attn_weights) 
@@ -266,7 +265,7 @@ def eager_attention_forward(
         causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
         attn_weights = attn_weights + causal_mask
 
-    if module.layer_idx != 0 and hasattr(module, 'quantize_P') and module.quantize_P == True:
+    if module.layer_idx != 0 and hasattr(module, 'quantize') and module.quantize == True:
         Aq_hi, Aq_lo, As_hi, As_lo = quantize_p(module, attn_weights, module.use_dual_quant_attn)
         attn_weights = (Aq_hi*As_hi+Aq_lo*As_lo)
     
@@ -360,8 +359,8 @@ def llama_fp4_attention_forward(
             query_states=query_states_uq
         
         else:
-            query_states=query_states_uq.clone()
-            key_states=key_states_uq.clone()
+            query_states=query_states_uq
+            key_states=key_states_uq
 
 
 
@@ -389,9 +388,9 @@ def llama_fp4_attention_forward(
 
     else:
 
-        query_states=query_states_uq.clone()
-        key_states=key_states_uq.clone()
+        query_states=query_states_uq
         key_states=key_states_uq
+
         if hasattr(llama_fp4_attention_forward, 'store_hessian') and llama_fp4_attention_forward.store_hessian:
             store_hessian(query_states, key_states, self.layer_idx)
 
