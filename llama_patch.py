@@ -97,10 +97,10 @@ def incoherence_processing(Q,K, H, K_mean=None):
     C_inv_sqrt=C_inv_sqrt.to(Q.device)
     C_inv_sqrt=C_inv_sqrt.repeat_interleave(dim=0, repeats=H_q//H_k)
 
-    Q = torch.einsum("bhtd,hde->bhte", Q, C_inv_sqrt)
+    # Q = torch.einsum("bhtd,hde->bhte", Q, C_inv_sqrt)
     Q = torch.einsum("bhtd,de->bhte", Q, M)
 
-    K = torch.einsum("bhtd,hed->bhte", K, C_sqrt)
+    # K = torch.einsum("bhtd,hed->bhte", K, C_sqrt)
     K = torch.einsum("bhtd,de->bhte", K, M)
 
     if K_mean is not None:
@@ -256,7 +256,7 @@ def eager_attention_forward(
 
     attn_weights_uq=torch.matmul(query_uq, key_states_uq.transpose(2, 3)) * scaling
 
-    if hasattr(module, 'quantize') and module.fp_mask:
+    if module.layer_idx != 0 and hasattr(module, 'quantize') and module.fp_mask:
         full_prec_mask=block_mask_with_first_block(key_states.shape[-2], 64).unsqueeze(0).unsqueeze(0).to(key_states.device) 
 
         attn_weights = torch.where(full_prec_mask, attn_weights_uq, attn_weights) 
@@ -266,7 +266,7 @@ def eager_attention_forward(
         causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
         attn_weights = attn_weights + causal_mask
 
-    if hasattr(module, 'quantize_P') and module.quantize_P == True:
+    if module.layer_idx != 0 and hasattr(module, 'quantize_P') and module.quantize_P == True:
         Aq_hi, Aq_lo, As_hi, As_lo = quantize_p(module, attn_weights, module.use_dual_quant_attn)
         attn_weights = (Aq_hi*As_hi+Aq_lo*As_lo)
     
