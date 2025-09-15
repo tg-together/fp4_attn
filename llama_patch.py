@@ -371,7 +371,7 @@ def llama_fp4_attention_forward(
             key_mean=key_mean.to(torch.float32)
 
 
-            hessian=self.q_hessian[f'layer_{self.layer_idx}']['q_mean_avg'].to(query_states.device).to(torch.float32)
+            hessian=self.q_hessian[f'layer_{self.layer_idx}']['q_hessian'].to(query_states.device).to(torch.float32)
 
             query_states, key_states, key_mean= incoherence_processing(query_states, key_states, hessian.clone(), key_mean)
 
