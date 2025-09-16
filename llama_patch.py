@@ -261,10 +261,16 @@ def flash_style_attention(
     compute_dtype = torch.float32 
     scale = 1.0 / math.sqrt(D)
     out = torch.empty((B, H, Qlen, Dv), dtype=q.dtype, device=q.device)
+    
+    # Create full precision mask if needed
+    full_prec_mask = None
+    if hasattr(module, 'quantize') and module.fp_mask:
+        full_prec_mask = block_mask_with_first_block(Klen, 64).to(q.device)
 
     for q_start in range(0, Qlen, block_q):
         q_end = min(q_start + block_q, Qlen)
         q_blk = q[:, :, q_start:q_end, :].to(compute_dtype)
+        q_blk_uq = q_uq[:, :, q_start:q_end, :].to(compute_dtype)
 
         m   = torch.full((B, H, q_end - q_start, 1), -float('inf'), dtype=compute_dtype, device=q.device)
         l   = torch.zeros((B, H, q_end - q_start, 1), dtype=compute_dtype, device=q.device)
@@ -273,9 +279,16 @@ def flash_style_attention(
         for k_start in range(0, Klen, block_k):
             k_end = min(k_start + block_k, Klen)
             k_blk = k[:, :, k_start:k_end, :].to(compute_dtype)
+            k_blk_uq = k_uq[:, :, k_start:k_end, :].to(compute_dtype)
             v_blk = v[:, :, k_start:k_end, :].to(compute_dtype)
 
             scores = torch.einsum("bhqd,bhkd->bhqk", q_blk, k_blk) * scale  # [B,H,qb,kb]
+            
+            # Apply full precision mask if enabled
+            if full_prec_mask is not None:
+                scores_uq = torch.einsum("bhqd,bhkd->bhqk", q_blk_uq, k_blk_uq) * scale
+                mask_block = full_prec_mask[q_start:q_end, k_start:k_end].unsqueeze(0).unsqueeze(0)
+                scores = torch.where(mask_block, scores_uq, scores)
 
             if causal:
                 keep = _causal_block_mask(q_start, q_end, k_start, k_end, q.device)  # [qb,kb]
@@ -289,6 +302,16 @@ def flash_style_attention(
             exp_scale = torch.exp(m - m_new)
 
             p = torch.exp(scores - m_new)
+
+            # Quantize p if enabled
+            if module.layer_idx != 0 and hasattr(module, 'quantize') and module.quantize == True:
+                # Normalize p for this block
+                p_norm = p / (torch.sum(p, dim=-1, keepdim=True) + 1e-10)
+                Aq_hi, Aq_lo, As_hi, As_lo = quantize_p(module, p_norm, module.use_dual_quant_attn)
+                p_quant = (Aq_hi*As_hi+Aq_lo*As_lo)
+                p = p_quant * (torch.sum(p, dim=-1, keepdim=True) + 1e-10)
+
+            
             l   = exp_scale * l   + torch.sum(p, dim=-1, keepdim=True)
             acc = exp_scale * acc + torch.einsum("bhqk,bhkd->bhqd", p, v_blk)
             m = m_new
@@ -298,58 +321,58 @@ def flash_style_attention(
         out[:, :, q_start:q_end, :] = (acc / l).to(q.dtype)
         del q_blk, m, l, acc
 
-    return out.transpose(1, 2).contiguous().to(torch.bfloat16),None
+    return out.transpose(1, 2).contiguous().to(module.dequant_dtype),None
 
 
-def eager_attention_forward(
-    module: nn.Module,
-    query: torch.Tensor,
-    key: torch.Tensor,
-    value: torch.Tensor,
-    query_uq: torch.Tensor,
-    key_uq: torch.Tensor,
-    value_uq: torch.Tensor,
-    attention_mask: Optional[torch.Tensor],
-    scaling: float,
-    dropout: float = 0.0,
-    **kwargs: Unpack[TransformersKwargs],
-):
-    if key.shape[1]!=query.shape[1]:
-        key_states = repeat_kv(key, module.num_key_value_groups)
-    else:
-        key_states=key
+# def eager_attention_forward(
+#     module: nn.Module,
+#     query: torch.Tensor,
+#     key: torch.Tensor,
+#     value: torch.Tensor,
+#     query_uq: torch.Tensor,
+#     key_uq: torch.Tensor,
+#     value_uq: torch.Tensor,
+#     attention_mask: Optional[torch.Tensor],
+#     scaling: float,
+#     dropout: float = 0.0,
+#     **kwargs: Unpack[TransformersKwargs],
+# ):
+#     if key.shape[1]!=query.shape[1]:
+#         key_states = repeat_kv(key, module.num_key_value_groups)
+#     else:
+#         key_states=key
 
-    value_states = repeat_kv(value, module.num_key_value_groups)
+#     value_states = repeat_kv(value, module.num_key_value_groups)
 
-    key_states_uq=repeat_kv(key_uq, module.num_key_value_groups)
+#     key_states_uq=repeat_kv(key_uq, module.num_key_value_groups)
 
-    attn_weights = torch.matmul(query, key_states.transpose(2, 3)) * scaling
+#     attn_weights = torch.matmul(query, key_states.transpose(2, 3)) * scaling
 
-    attn_weights_uq=torch.matmul(query_uq, key_states_uq.transpose(2, 3)) * scaling
+#     attn_weights_uq=torch.matmul(query_uq, key_states_uq.transpose(2, 3)) * scaling
 
-    if hasattr(module, 'quantize') and module.fp_mask:
-        full_prec_mask=block_mask_with_first_block(key_states.shape[-2], 64).unsqueeze(0).unsqueeze(0).to(key_states.device) 
+#     if hasattr(module, 'quantize') and module.fp_mask:
+#         full_prec_mask=block_mask_with_first_block(key_states.shape[-2], 64).unsqueeze(0).unsqueeze(0).to(key_states.device) 
 
-        attn_weights = torch.where(full_prec_mask, attn_weights_uq, attn_weights) 
-
-
-    if attention_mask is not None:
-        causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
-        attn_weights = attn_weights + causal_mask
-
-    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
-    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+#         attn_weights = torch.where(full_prec_mask, attn_weights_uq, attn_weights) 
 
 
-    if module.layer_idx != 0 and hasattr(module, 'quantize') and module.quantize == True:
-        Aq_hi, Aq_lo, As_hi, As_lo = quantize_p(module, attn_weights, module.use_dual_quant_attn)
-        attn_weights = (Aq_hi*As_hi+Aq_lo*As_lo)
+#     if attention_mask is not None:
+#         causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
+#         attn_weights = attn_weights + causal_mask
+
+#     attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
+#     attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+
+
+#     if module.layer_idx != 0 and hasattr(module, 'quantize') and module.quantize == True:
+#         Aq_hi, Aq_lo, As_hi, As_lo = quantize_p(module, attn_weights, module.use_dual_quant_attn)
+#         attn_weights = (Aq_hi*As_hi+Aq_lo*As_lo)
     
 
-    attn_output = torch.matmul(attn_weights, value_states)
-    attn_output = attn_output.transpose(1, 2).contiguous()
+#     attn_output = torch.matmul(attn_weights, value_states)
+#     attn_output = attn_output.transpose(1, 2).contiguous()
 
-    return attn_output.to(torch.bfloat16), attn_weights.to(torch.bfloat16)
+#     return attn_output.to(torch.bfloat16), attn_weights.to(torch.bfloat16)
 
 
 
@@ -476,6 +499,19 @@ def llama_fp4_attention_forward(
 
     if self.config._attn_implementation != "eager":
         attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
+
+
+    #default attention interface
+    # attn_output, attn_weights = attention_interface(
+    #     self,
+    #     query_states,
+    #     key_states,
+    #     value_states,
+    #     attention_mask,
+    #     dropout=0.0 if not self.training else self.attention_dropout,
+    #     scaling=self.scaling,
+    #     **kwargs,
+    # )
 
     # attn_output, attn_weights = eager_attention_forward(
     #     self,
