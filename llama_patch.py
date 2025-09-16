@@ -321,7 +321,7 @@ def flash_style_attention(
         out[:, :, q_start:q_end, :] = (acc / l).to(q.dtype)
         del q_blk, m, l, acc
 
-    return out.transpose(1, 2).contiguous().to(module.dequant_dtype),None
+    return out.transpose(1, 2).contiguous().to(q.dtype),None
 
 
 # def eager_attention_forward(
@@ -528,14 +528,15 @@ def llama_fp4_attention_forward(
     # )
     attn_output, attn_weights = flash_style_attention(
         self,
-        query_states.to(torch.float32),
-        key_states.to(torch.float32),
-        value_states.to(torch.float32),
+        query_states,
+        key_states,
+        value_states,
         query_states_uq,
         key_states_uq,
         attn_mask=attention_mask
     )
-
+    if hasattr(self, 'quantize') and self.quantize:
+        attn_output = attn_output.to(self.dequant_dtype)
 
     attn_output = attn_output.reshape(*input_shape, -1).contiguous()
     attn_output = self.o_proj(attn_output)
