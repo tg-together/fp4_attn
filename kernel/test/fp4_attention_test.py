@@ -143,33 +143,38 @@ def test_gqa_attention_correctness(batch_size, seq_len):
         results_dir=RESULTS_DIR, verbose=True, assert_close=True
     )
 
-# @pytest.mark.parametrize("batch_size", [1, 2])
-# @pytest.mark.parametrize("seq_len", [128, 256])
-# @pytest.mark.timeout(30)
-# def test_gqa_causal_attention_correctness(batch_size, seq_len):
-#     """GQA + Causal test"""
-#     module = setup_module(batch_size=batch_size, seq_len=seq_len)
-#     inputs = generate_inputs(module, batch_size=batch_size, seq_len=seq_len)
+@pytest.mark.parametrize("batch_size", [1, 2, 3, 4])
+@pytest.mark.parametrize("seq_len", [128, 256, 384, 512])
+@pytest.mark.timeout(30)
+def test_gqa_causal_attention_correctness(batch_size, seq_len):
+    """GQA + Causal test"""
+    module = setup_module(batch_size=batch_size, seq_len=seq_len)
+    inputs = generate_inputs(module, batch_size=batch_size, seq_len=seq_len)
     
-#     # Disable quantization but keep causal masking
-#     if hasattr(module, 'quantize'):
-#         delattr(module, 'quantize')
-#     module.fp_mask = False
+    # Disable quantization but keep causal masking
+    if hasattr(module, 'quantize'):
+        delattr(module, 'quantize')
+    module.fp_mask = False
+    module.training = False
+    module.attention_dropout = 0.0
+    module.skip_oproj = True
+    # input distribution after quantization makes it difficult to test numerical correctness
+    module.randn_test = True
     
-#     # Run both implementations
-#     module.config._attn_implementation = "eager"
-#     ref_output, _ = llama_fp4_attention_forward(module, **inputs)
-#     ref_output = rearrange(ref_output, 'b n (h d) -> b h n d', h=module.num_heads)
+    # Run both implementations
+    module.config._attn_implementation = "eager"
+    ref_output, _ = llama_fp4_attention_forward(module, **inputs)
+    ref_output = rearrange(ref_output, 'b n (h d) -> b h n d', h=module.num_heads)
     
-#     module.config._attn_implementation = "tkfp4"
-#     fp4_output, _ = llama_fp4_attention_forward(module, **inputs)
-#     fp4_output = rearrange(fp4_output, 'b n (h d) -> b h n d', h=module.num_heads)
+    module.config._attn_implementation = "tkfp4"
+    fp4_output, _ = llama_fp4_attention_forward(module, **inputs)
+    fp4_output = rearrange(fp4_output, 'b n (h d) -> b h n d', h=module.num_heads)
     
-#     assert_correctness(
-#         f"gqa_causal_bs{batch_size}_seq{seq_len}",
-#         fp4_output, ref_output,
-#         results_dir=RESULTS_DIR, verbose=True, assert_close=True
-#     )
+    assert_correctness(
+        f"gqa_causal_bs{batch_size}_seq{seq_len}",
+        fp4_output, ref_output,
+        results_dir=RESULTS_DIR, verbose=True, assert_close=True
+    )
 
 # @pytest.mark.parametrize("batch_size", [1, 2])
 # @pytest.mark.parametrize("seq_len", [128, 256])

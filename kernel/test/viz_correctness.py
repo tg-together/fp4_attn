@@ -9,7 +9,7 @@ DEFAULT_RESULTS_DIR = "/home/austin/results"
  # or hidden dimensions per row (if AGGREGATE_HIDDEN is False)
 TILE_SIZE = 128 
 SHOW_HEADS = True
-AGGREGATE_HIDDEN = False
+AGGREGATE_HIDDEN = os.getenv('AGGREGATE_HIDDEN', '0') == '1'
 
 def assert_correctness(
     name,

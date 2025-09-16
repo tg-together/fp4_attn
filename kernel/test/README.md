@@ -5,7 +5,10 @@ Minimal, automated testing infrastructure for FP4 attention kernel validation.
 ## Quick Start
 
 ```bash
-# Manual pytest
+make clean && make && cp b200_attn_fp4.cpython-312-x86_64-linux-gnu.so /[your-path]/fp4_attn/
+```
+
+```bash
 python -m pytest fp4_attention_test.py -v
 ```
 

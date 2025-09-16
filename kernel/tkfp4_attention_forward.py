@@ -39,13 +39,24 @@ def tkfp4_attention_forward(
 
     l = torch.empty((_query.shape[0], _query.shape[1], 1, _query.shape[2]), dtype=torch.float32, device=query.device)
     o = torch.empty_like(_query)
-    b200_attn_fp4.fwd_attend_ker_128_noncausal(
-        _query,
-        _key, 
-        _value,
-        l,
-        o,
-    )
+
+    # only causal mask supported for now
+    if attention_mask is not None:
+        b200_attn_fp4.fwd_attend_ker_128_causal(
+            _query,
+            _key, 
+            _value,
+            l,
+            o,
+        )
+    else:
+        b200_attn_fp4.fwd_attend_ker_128_noncausal(
+            _query,
+            _key, 
+            _value,
+            l,
+            o,
+        )
 
     o = o.transpose(1, 2).contiguous()
 
