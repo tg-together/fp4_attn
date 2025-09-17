@@ -2,7 +2,7 @@
 
 export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 
-
+num_samples=100
 
 CUDA_VISIBLE_DEVICES=0  python lm_eval.py --device cuda:0 --model meta-llama/Meta-Llama-3-8B --task pile_10k --quantize QKVP --num_samples $num_samples 2>&1 | tee quantized_lm_eval.txt &
 
