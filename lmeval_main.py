@@ -69,7 +69,6 @@ def parse_arguments():
     """Parse command line arguments and return args and eval_kwargs."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", required=True, help="Model name to evaluate")
-    parser.add_argument("--device", default="auto", help="Device to use")
     parser.add_argument("--output", help="Output JSON file")
     parser.add_argument("--num_samples", type=int, default=None, help="Number of samples to evaluate")
     parser.add_argument("--visualize", action="store_true", help="Enable QKV visualization")
@@ -171,7 +170,7 @@ def main():
             results = calculate_perplexity(
                 model=args.model,
                 tasks=args.task,
-                device=args.device,
+                device="auto",
                 num_samples=args.num_samples,
                 max_length=max_length,
                 **eval_kwargs
