@@ -31,6 +31,7 @@ except ImportError:
         pass
 hessian_running_averages = {
     'q_means': {},  # layer_idx -> running average of Q means (1 x H_q x 1 x D)
+    'k_means': {},  # layer_idx -> running average of K means (1 x H_k x 1 x D)
     'counts': {}    # layer_idx -> count of samples
 }
 
@@ -44,15 +45,17 @@ def store_hessian(query_states, key_states, layer_idx):
     B, H_q, T, D = query_states.shape
     B, H_k, T, D = key_states.shape
 
-    H_all = torch.einsum("bhtd,bhte->hde", query_states, query_states)
+    H_all_q = torch.einsum("bhtd,bhte->hde", query_states, query_states)
+    H_all_k = torch.einsum("bhtd,bhte->hde", key_states, key_states)
 
     n_rep=H_q//H_k
 
-    H_grouped = H_all.view(H_q // n_rep, n_rep, D, D).mean(dim=1)
+    H_grouped = H_all_q.view(H_q // n_rep, n_rep, D, D).mean(dim=1)
     
 
     if layer_idx not in hessian_running_averages['counts']:
         hessian_running_averages['q_means'][layer_idx] = torch.zeros_like(H_grouped).cpu()
+        hessian_running_averages['k_means'][layer_idx] = torch.zeros_like(H_all_k).cpu()
         hessian_running_averages['counts'][layer_idx] = 0
     
 
@@ -60,6 +63,10 @@ def store_hessian(query_states, key_states, layer_idx):
     hessian_running_averages['q_means'][layer_idx] = (
         (hessian_running_averages['q_means'][layer_idx] * count + 
          H_grouped.detach().cpu()) / (count + 1)
+    )
+    hessian_running_averages['k_means'][layer_idx] = (
+        (hessian_running_averages['k_means'][layer_idx] * count + 
+         H_all_k.detach().cpu()) / (count + 1)
     )
     hessian_running_averages['counts'][layer_idx] += 1
     
@@ -103,37 +110,43 @@ def get_R(QH,KH):
 
     return R, invR
 
-def incoherence_processing(Q,K, QH, KH, K_mean=None):
+def incoherence_processing(self, Q,K, QH, KH, K_mean=None):
 
     B, H_q, T, D = Q.shape
     B, H_k, T, D = K.shape
     
+    if self.randomization == 'hadamard':
+        M = (torch.tensor(hadamard(D), dtype=torch.float64) / math.sqrt(D)).to(Q.device)
+    else:
+        M=torch.tensor(ortho_group.rvs(dim=D), dtype=torch.float64).to(Q.device)
 
-    M=torch.tensor(ortho_group.rvs(dim=D), dtype=torch.float64).to(Q.device)
-    # M = (torch.tensor(hadamard(D), dtype=torch.float64) / math.sqrt(D)).to(Q.device)
+    if self.hessians:
+        reg_scale=1e-2
 
-    reg_scale=1e-2
+        QH.div_(QH.diagonal(dim1=-2, dim2=-1).mean(dim=-1).unsqueeze(-1).unsqueeze(-1))
 
-    QH.div_(QH.diagonal(dim1=-2, dim2=-1).mean(dim=-1).unsqueeze(-1).unsqueeze(-1))
+        QH.diagonal(dim1=-2, dim2=-1).add_(reg_scale)
 
-    QH.diagonal(dim1=-2, dim2=-1).add_(reg_scale)
+        KH.div_(KH.diagonal(dim1=-2, dim2=-1).mean(dim=-1).unsqueeze(-1).unsqueeze(-1))
+        KH.diagonal(dim1=-2, dim2=-1).add_(reg_scale)
 
-    KH.div_(KH.diagonal(dim1=-2, dim2=-1).mean(dim=-1).unsqueeze(-1).unsqueeze(-1))
-    KH.diagonal(dim1=-2, dim2=-1).add_(reg_scale)
+        R, invR=get_R(QH,KH)
 
-    R, invR=get_R(QH,KH)
+        invR=invR.repeat_interleave(dim=0, repeats=H_q//H_k)
 
-    invR=invR.repeat_interleave(dim=0, repeats=H_q//H_k)
+        Q = torch.einsum("bhtd,hed->bhte", Q, invR)
+        K = torch.einsum("bhtd,hde->bhte", K, R)
+        if K_mean is not None:
+            K_mean = torch.einsum("bhtd,hde->bhte", K_mean, R)
 
-    Q = torch.einsum("bhtd,hed->bhte", Q, invR)
+
     Q = torch.einsum("bhtd,de->bhte", Q, M)
 
-    K = torch.einsum("bhtd,hde->bhte", K, R)
+    
     K = torch.einsum("bhtd,de->bhte", K, M)
 
     if K_mean is not None:
 
-        K_mean = torch.einsum("bhtd,hde->bhte", K_mean, R)
         K_mean = torch.einsum("bhtd,de->bhte", K_mean, M)
 
     return Q, K, K_mean
@@ -151,9 +164,9 @@ def quantize_q(module, q_orig, dual=True):
     q_=q_.reshape(B * T, H_q, D)
 
     if dual:
-        Qq_hi, Qq_lo, Qs_hi, Qs_lo = module.fp4_quantizer.dual_nvfp4(q_, search=False)
+        Qq_hi, Qq_lo, Qs_hi, Qs_lo = module.fp4_quantizer.dual_nvfp4(q_, search=True)
     else:
-        Qq_hi, Qs_hi = module.fp4_quantizer.single_nvfp4(q_, search=False)
+        Qq_hi, Qs_hi = module.fp4_quantizer.single_nvfp4(q_, search=True)
         Qq_lo = torch.zeros_like(Qq_hi)
         Qs_lo = torch.zeros_like(Qs_hi)
 
@@ -224,7 +237,7 @@ def quantize_p(module, attn_weights, dual=True):
     attn_weights_2d = attn_weights.reshape(-1, attn_weights.shape[-1])
 
     if dual:
-        Aq_hi, Aq_lo, As_hi, As_lo = module.fp4_quantizer.dual_nvfp4(attn_weights_2d, search=False)
+        Aq_hi, Aq_lo, As_hi, As_lo = module.fp4_quantizer.dual_nvfp4(attn_weights_2d, search=True)
 
         Aq_hi = Aq_hi.reshape(original_shape)
         Aq_lo = Aq_lo.reshape(original_shape)
@@ -234,7 +247,7 @@ def quantize_p(module, attn_weights, dual=True):
 
     else:
 
-        Aq_hi,As_hi = module.fp4_quantizer.single_nvfp4(attn_weights_2d, search=False)
+        Aq_hi,As_hi = module.fp4_quantizer.single_nvfp4(attn_weights_2d, search=True)
         Aq_hi = Aq_hi.reshape(original_shape)
         As_hi = As_hi.reshape(*original_shape[:-1],1)
         Aq_lo = torch.zeros_like(Aq_hi)
@@ -332,9 +345,8 @@ def flash_style_attention(
 
             p = torch.exp(scores - m_new)
 
-            # Quantize p if enabled
+
             if module.layer_idx != 0 and hasattr(module, 'quantize') and module.quantize == True:
-                # Normalize p for this block
                 p_norm = p / (torch.sum(p, dim=-1, keepdim=True) + 1e-10)
                 Aq_hi, Aq_lo, As_hi, As_lo = quantize_p(module, p_norm, module.use_dual_quant_attn)
                 p_quant = (Aq_hi*As_hi+Aq_lo*As_lo)
@@ -353,58 +365,6 @@ def flash_style_attention(
     return out.transpose(1, 2).contiguous().to(q.dtype),None
 
 
-# def eager_attention_forward(
-#     module: nn.Module,
-#     query: torch.Tensor,
-#     key: torch.Tensor,
-#     value: torch.Tensor,
-#     query_uq: torch.Tensor,
-#     key_uq: torch.Tensor,
-#     value_uq: torch.Tensor,
-#     attention_mask: Optional[torch.Tensor],
-#     scaling: float,
-#     dropout: float = 0.0,
-#     **kwargs: Unpack[TransformersKwargs],
-# ):
-#     if key.shape[1]!=query.shape[1]:
-#         key_states = repeat_kv(key, module.num_key_value_groups)
-#     else:
-#         key_states=key
-
-#     value_states = repeat_kv(value, module.num_key_value_groups)
-
-#     key_states_uq=repeat_kv(key_uq, module.num_key_value_groups)
-
-#     attn_weights = torch.matmul(query, key_states.transpose(2, 3)) * scaling
-
-#     attn_weights_uq=torch.matmul(query_uq, key_states_uq.transpose(2, 3)) * scaling
-
-#     if hasattr(module, 'quantize') and module.fp_mask:
-#         full_prec_mask=block_mask_with_first_block(key_states.shape[-2], 64).unsqueeze(0).unsqueeze(0).to(key_states.device) 
-
-#         attn_weights = torch.where(full_prec_mask, attn_weights_uq, attn_weights) 
-
-
-#     if attention_mask is not None:
-#         causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
-#         attn_weights = attn_weights + causal_mask
-
-#     attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
-#     attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
-
-
-#     if module.layer_idx != 0 and hasattr(module, 'quantize') and module.quantize == True:
-#         Aq_hi, Aq_lo, As_hi, As_lo = quantize_p(module, attn_weights, module.use_dual_quant_attn)
-#         attn_weights = (Aq_hi*As_hi+Aq_lo*As_lo)
-    
-
-#     attn_output = torch.matmul(attn_weights, value_states)
-#     attn_output = attn_output.transpose(1, 2).contiguous()
-
-#     return attn_output.to(torch.bfloat16), attn_weights.to(torch.bfloat16)
-
-
-
 def llama_fp4_attention_forward(
     self,
     hidden_states: torch.Tensor,
@@ -419,34 +379,30 @@ def llama_fp4_attention_forward(
     
     # Initialize FP4Quantizer if not already present
     if not hasattr(self, 'fp4_quantizer') and hasattr(llama_fp4_attention_forward, 'quantize_enabled'):
+
         self.quantize = True
         self.dequant_dtype = self.q_proj.weight.dtype
-        
-
-
         self.use_dual_quant_q = os.getenv('FP4_USE_DUAL_QUANT_Q', 'true').lower() == 'true'
         self.use_dual_quant_attn = os.getenv('FP4_USE_DUAL_QUANT_ATTN', 'true').lower() == 'true'
         self.mean_before_rope = os.getenv('MEAN_BEFORE_ROPE', 'false').lower() == 'true'
         self.fp_mask = os.getenv('FP_MASK', 'true').lower() == 'true'
         self.ip = os.getenv('IP', 'true').lower() == 'true'
+        self.randomization = os.getenv('RANDOMIZATION', 'hadamarad').lower()
+        self.hessians=os.getenv('HESSIANS', 'true').lower() == 'true'
         self.qk_mean_averages_before_rope=torch.load("qk_mean_averages_before_rope.pt")
-        self.q_hessian=torch.load("q_hessians.pt")
-        self.k_hessian=torch.load("k_hessians.pt")
+        self.qk_hessians=torch.load("qk_hessians.pt")
         # Initialize FP4Quantizer with appropriate parameters
         self.fp4_quantizer = FP4Quantizer(global_sf_max=1536, device=self.q_proj.weight.device)
         # Debug: print env var-driven configuration
-        # print(
-        #     f"FP4_USE_Q_SEARCH={self.use_Q_search}, "
-        #     f"FP4_USE_P_SEARCH={self.use_P_search}, "
-        #     f"FP4_USE_KV_SEARCH={self.use_KV_search}, "
-        #     f"FP4_USE_DUAL_QUANT_Q={self.use_dual_quant_q}, "
-        #     f"FP4_USE_DUAL_QUANT_ATTN={self.use_dual_quant_attn}, "
-        #     f"ZERO_POINT_KV={self.zero_point_KV}, "
-        #     f"ZERO_POINT_Q={self.zero_point_Q}, "
-        #     f"SHIFTED_SM={self.with_shift}, "
-        #     f"MEAN_BEFORE_ROPE={self.mean_before_rope}, "
-        #     f"IP={self.ip}"
-        # )
+        print(
+            f"FP4_USE_DUAL_QUANT_Q={self.use_dual_quant_q}, "
+            f"FP4_USE_DUAL_QUANT_ATTN={self.use_dual_quant_attn}, "
+            f"MEAN_BEFORE_ROPE={self.mean_before_rope}, "
+            f"FP_MASK={self.fp_mask}, "
+            f"IP={self.ip}, "
+            f"RANDOMIZATION={self.randomization}, "
+            f"HESSIANS={self.hessians}"
+        )
 
 
 
@@ -490,13 +446,12 @@ def llama_fp4_attention_forward(
 
 
         if self.ip:
-            q_hessian=self.q_hessian[f'layer_{self.layer_idx}']['q_hessian'].to(query_states.device)
-            k_hessian=self.k_hessian[f'layer_{self.layer_idx}']['k_hessian'].to(key_states.device)
-            query_states, key_states, key_mean= incoherence_processing(query_states.to(torch.float64), key_states.to(torch.float64), q_hessian.to(torch.float64), k_hessian.to(torch.float64), key_mean.to(torch.float64))
-
+            q_hessian=self.qk_hessians[f'layer_{self.layer_idx}']['q_hessian'].to(query_states.device)
+            k_hessian=self.qk_hessians[f'layer_{self.layer_idx}']['k_hessian'].to(key_states.device)
+            query_states, key_states, key_mean= incoherence_processing(self, query_states.to(torch.float64), key_states.to(torch.float64), q_hessian.to(torch.float64), k_hessian.to(torch.float64), key_mean.to(torch.float64))
+       
         Qq_hi, Qq_lo, Qs_hi, Qs_lo = quantize_q(self, query_states, dual=self.use_dual_quant_q)
         query_states = Qq_hi*Qs_hi + Qq_lo*Qs_lo 
-
 
         Kq, Ks = quantize_k(self, key_states)
         key_states = Kq*Ks 
@@ -518,12 +473,12 @@ def llama_fp4_attention_forward(
             store_hessian(query_states, key_states, self.layer_idx)
 
 
-    attention_interface: Callable = eager_attention_forward
+    attention_interface: Callable = flash_style_attention
 
 
     ##### UNCOMMENT THIS FOR EAGER ATTENTION AND P QUANTIZATION #####
 
-    # self.config._attn_implementation = "eager"
+    self.config._attn_implementation = "eager"
 
     if self.config._attn_implementation != "eager":
         attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
@@ -532,29 +487,16 @@ def llama_fp4_attention_forward(
     #default attention interface
     # attn_output, attn_weights = attention_interface(
     #     self,
-    #     query_states.to(torch.float32),
-    #     key_states.to(torch.float32),
-    #     value_states.to(torch.float32),
+    #     query_states,
+    #     key_states,
+    #     value_states,
     #     attention_mask,
     #     dropout=0.0 if not self.training else self.attention_dropout,
     #     scaling=self.scaling,
     #     **kwargs,
     # )
-    # attn_output=attn_output.to(torch.bfloat16)
-    # attn_output, attn_weights = eager_attention_forward(
-    #     self,
-    #     query_states.to(torch.float32),
-    #     key_states.to(torch.float32),
-    #     value_states.to(torch.float32),
-    #     query_states_uq,
-    #     key_states_uq,
-    #     None,
-    #     attention_mask,
-    #     dropout=0.0 if not self.training else self.attention_dropout,
-    #     scaling=self.scaling,
-    #     **kwargs,
-    # )
-    attn_output, attn_weights = flash_style_attention(
+
+    attn_output, attn_weights = attention_interface(
         self,
         query_states,
         key_states,

@@ -14,13 +14,13 @@ import numpy as np
 
 
 
-def save_q_hessian(tag=""):
+def save_qk_hessians(tag=""):
     """Save the running averages of Q Hessian per layer.
     Each mean has shape [1, H, 1, D] where H is the number of heads."""
     from llama_patch import hessian_running_averages
     
     if not hessian_running_averages['counts']:
-        print("No Q/K mean averages to save")
+        print("No Q/K Hessian averages to save")
         return
     
     # Collect the averages (already computed incrementally)
@@ -29,15 +29,15 @@ def save_q_hessian(tag=""):
         count = hessian_running_averages['counts'][layer_idx]
         if count > 0:
             averages[f'layer_{layer_idx}'] = {
-                'q_mean_avg': hessian_running_averages['q_means'][layer_idx],  # Shape: [1, H_q, 1, D]
-                'num_samples': count
+                'q_hessian': hessian_running_averages['q_means'][layer_idx],  # Shape: [1, H_q, 1, D]
+                'k_hessian': hessian_running_averages['k_means'][layer_idx],  # Shape: [1, H_k, 1, D]
             }
     
     # Save to file using torch.save
-    filename = f"q_hessians_{tag}.pt" if tag else "q_hessians.pt"
+    filename = f"qk_hessians_{tag}.pt" if tag else "qk_hessians.pt"
     torch.save(averages, filename)
     
-    print(f"Saved Q Hessian to {filename}")
+    print(f"Saved Q/K Hessian to {filename}")
 
 
 def calculate_perplexity(model, tasks, num_samples=None, device="auto", max_length=2048, **eval_kwargs):
@@ -178,7 +178,7 @@ def main():
                 )
         
         if args.record_hessian:
-            save_q_hessian(args.tag)
+            save_qk_hessians(args.tag)
         
         # export_memory_snapshot()
         # stop_record_memory_history()
