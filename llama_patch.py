@@ -77,34 +77,63 @@ def batch_matrix_sqrt_and_inv_sqrt(H, eps=1e-10):
     
     return H_sqrt, H_invsqrt
 
-def incoherence_processing(Q,K, H, K_mean=None):
+def get_R(QH,KH):
+
+    def batch_sqrtm(H):
+       
+        eigvals, eigvecs = torch.linalg.eigh(H)  
+        sqrtH = eigvecs @ torch.diag_embed(eigvals.clamp(min=0).sqrt()) @ eigvecs.transpose(-2, -1)
+        return sqrtH
+
+
+    KH = KH / KH.diagonal(dim1=-2, dim2=-1).mean(dim=-1, keepdim=True).unsqueeze(-1)
+    QH = QH / QH.diagonal(dim1=-2, dim2=-1).mean(dim=-1, keepdim=True).unsqueeze(-1)
+
+
+    # Square roots
+    sKH = batch_sqrtm(KH)   
+    sQH = batch_sqrtm(QH)  
+
+    # Batched SVD
+    U, S, Vh = torch.linalg.svd(sKH @ sQH)   
+
+    # Build R and its inverse per head
+    R = sQH @ Vh.transpose(-2, -1) @ torch.diag_embed(S.rsqrt())
+    invR = torch.linalg.inv(R)
+
+    return R, invR
+
+def incoherence_processing(Q,K, QH, KH, K_mean=None):
 
     B, H_q, T, D = Q.shape
     B, H_k, T, D = K.shape
-
+    
 
     M=torch.tensor(ortho_group.rvs(dim=D), dtype=torch.float64).to(Q.device)
+    # M = (torch.tensor(hadamard(D), dtype=torch.float64) / math.sqrt(D)).to(Q.device)
+
     reg_scale=1e-2
 
-    H.div_(H.diagonal(dim1=-2, dim2=-1).mean(dim=-1).unsqueeze(-1).unsqueeze(-1))
+    QH.div_(QH.diagonal(dim1=-2, dim2=-1).mean(dim=-1).unsqueeze(-1).unsqueeze(-1))
 
-    H.diagonal(dim1=-2, dim2=-1).add_(reg_scale)
+    QH.diagonal(dim1=-2, dim2=-1).add_(reg_scale)
 
-    C_sqrt, C_inv_sqrt=batch_matrix_sqrt_and_inv_sqrt(H)
+    KH.div_(KH.diagonal(dim1=-2, dim2=-1).mean(dim=-1).unsqueeze(-1).unsqueeze(-1))
+    KH.diagonal(dim1=-2, dim2=-1).add_(reg_scale)
 
-    C_sqrt=C_sqrt.to(Q.device)
-    C_inv_sqrt=C_inv_sqrt.to(Q.device)
-    C_inv_sqrt=C_inv_sqrt.repeat_interleave(dim=0, repeats=H_q//H_k)
+    R, invR=get_R(QH,KH)
 
-    # Q = torch.einsum("bhtd,hde->bhte", Q, C_inv_sqrt)
+    invR=invR.repeat_interleave(dim=0, repeats=H_q//H_k)
+
+    Q = torch.einsum("bhtd,hed->bhte", Q, invR)
     Q = torch.einsum("bhtd,de->bhte", Q, M)
 
-    # K = torch.einsum("bhtd,hed->bhte", K, C_sqrt)
+    K = torch.einsum("bhtd,hde->bhte", K, R)
     K = torch.einsum("bhtd,de->bhte", K, M)
 
     if K_mean is not None:
 
-        # K_mean = torch.einsum("bhtd,hed->bhte", K_mean, C_sqrt)
+        K_mean = torch.einsum("bhtd,hde->bhte", K_mean, R)
         K_mean = torch.einsum("bhtd,de->bhte", K_mean, M)
 
     return Q, K, K_mean
@@ -402,6 +431,7 @@ def llama_fp4_attention_forward(
         self.ip = os.getenv('IP', 'true').lower() == 'true'
         self.qk_mean_averages_before_rope=torch.load("qk_mean_averages_before_rope.pt")
         self.q_hessian=torch.load("q_hessians.pt")
+        self.k_hessian=torch.load("k_hessians.pt")
         # Initialize FP4Quantizer with appropriate parameters
         self.fp4_quantizer = FP4Quantizer(global_sf_max=1536, device=self.q_proj.weight.device)
         # Debug: print env var-driven configuration
@@ -460,11 +490,9 @@ def llama_fp4_attention_forward(
 
 
         if self.ip:
-
-            hessian=self.q_hessian[f'layer_{self.layer_idx}']['q_hessian'].to(query_states.device)
-            query_states, key_states, key_mean= incoherence_processing(query_states.to(torch.float64), key_states.to(torch.float64), hessian.to(torch.float64), key_mean.to(torch.float64))
-
-
+            q_hessian=self.q_hessian[f'layer_{self.layer_idx}']['q_hessian'].to(query_states.device)
+            k_hessian=self.k_hessian[f'layer_{self.layer_idx}']['k_hessian'].to(key_states.device)
+            query_states, key_states, key_mean= incoherence_processing(query_states.to(torch.float64), key_states.to(torch.float64), q_hessian.to(torch.float64), k_hessian.to(torch.float64), key_mean.to(torch.float64))
 
         Qq_hi, Qq_lo, Qs_hi, Qs_lo = quantize_q(self, query_states, dual=self.use_dual_quant_q)
         query_states = Qq_hi*Qs_hi + Qq_lo*Qs_lo 
@@ -495,7 +523,7 @@ def llama_fp4_attention_forward(
 
     ##### UNCOMMENT THIS FOR EAGER ATTENTION AND P QUANTIZATION #####
 
-    self.config._attn_implementation = "eager"
+    # self.config._attn_implementation = "eager"
 
     if self.config._attn_implementation != "eager":
         attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
@@ -504,15 +532,15 @@ def llama_fp4_attention_forward(
     #default attention interface
     # attn_output, attn_weights = attention_interface(
     #     self,
-    #     query_states,
-    #     key_states,
-    #     value_states,
+    #     query_states.to(torch.float32),
+    #     key_states.to(torch.float32),
+    #     value_states.to(torch.float32),
     #     attention_mask,
     #     dropout=0.0 if not self.training else self.attention_dropout,
     #     scaling=self.scaling,
     #     **kwargs,
     # )
-
+    # attn_output=attn_output.to(torch.bfloat16)
     # attn_output, attn_weights = eager_attention_forward(
     #     self,
     #     query_states.to(torch.float32),
