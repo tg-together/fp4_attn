@@ -4,6 +4,9 @@ From https://github.com/IST-DASLab/gptq/blob/main/datautils.py
 
 import numpy as np
 import torch
+from datasets import load_dataset
+from transformers import AutoTokenizer
+from torch.utils.data import TensorDataset, DataLoader
 
 
 def set_seed(seed):
@@ -11,27 +14,27 @@ def set_seed(seed):
     torch.random.manual_seed(seed)
 
 
-def get_wikitext2(nsamples, seed, seqlen, model):
-    from datasets import load_dataset
-    traindata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='train')
+def get_wikitext2(nsamples, seed, seqlen, batch_size, model):
+
     testdata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test')
 
-    from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False)
-    trainenc = tokenizer("\n\n".join(traindata['text']), return_tensors='pt')
-    testenc = tokenizer("\n\n".join(testdata['text']), return_tensors='pt')
+    
+    tokenizer = AutoTokenizer.from_pretrained(model, use_fast=True)
+  
+    testenc = tokenizer("\n\n".join(testdata['text']), return_tensors='pt')['input_ids']
 
-    import random
-    random.seed(seed)
-    trainloader = []
-    for _ in range(nsamples):
-        i = random.randint(0, trainenc.input_ids.shape[1] - seqlen - 1)
-        j = i + seqlen
-        inp = trainenc.input_ids[:, i:j]
-        tar = inp.clone()
-        tar[:, :-1] = -100
-        trainloader.append((inp, tar))
-    return trainloader, testenc
+    n_samples = testenc.shape[1]//seqlen
+    
+
+    testenc = testenc[0, 1:(n_samples*seqlen)+1].view(n_samples,-1)
+
+    sos_token = tokenizer.bos_token_id
+    testenc = torch.cat((torch.tensor([sos_token]*n_samples).unsqueeze(1), testenc), 1)
+
+    dataset = TensorDataset(testenc)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+
+    return dataloader
 
 
 def get_ptb(nsamples, seed, seqlen, model):
@@ -192,11 +195,10 @@ def get_loaders(name, nsamples=128, seed=0, seqlen=2048, model=''):
         return get_c4(nsamples, seed, seqlen, model)
 
 
-def get_test_tokens(name, seed=0, seqlen=2048, model=''):
+def get_test_tokens(name, seed=0, seqlen=2048, batch_size=10, model=''):
     train_samples = 0
     if name == 'wikitext2':
-        return get_wikitext2(train_samples, seed, seqlen,
-                             model)[1]['input_ids']
+        return get_wikitext2(train_samples, seed, seqlen,batch_size, model)
     elif name == 'c4':
         return get_c4(train_samples, seed, seqlen, model)[1].input_ids
     elif name == 'c4_new':

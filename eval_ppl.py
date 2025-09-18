@@ -9,7 +9,7 @@ import glog
 import torch
 from tqdm import tqdm
 from llama_patch import llama_fp4_attention_forward
-import gptq_data_utils
+import data_utils
 import transformers
 from transformers import AutoModelForCausalLM
 
@@ -18,8 +18,9 @@ torch.set_grad_enabled(False)
 parser = argparse.ArgumentParser()
 parser.add_argument('--seed', default=0, type=int)
 parser.add_argument('--hf_path', default='hfized/quantized_hada_70b', type=str)
-parser.add_argument('--seqlen', default=2048, type=int)
-# parser.add_argument('--no_use_cuda_graph', action='store_true')
+parser.add_argument('--seqlen', default=8192, type=int)
+parser.add_argument('--batch_size', default=5, type=int)
+parser.add_argument('--num_samples', default=100, type=int)
 parser.add_argument('--quantize', action='store_true')
 parser.add_argument('--no_use_flash_attn', action='store_true')
 
@@ -35,40 +36,51 @@ def main(args):
         device_map="auto", 
         torch_dtype=torch.bfloat16
     )
-
+    model.eval() 
 
     for dataset in datasets:
-        input_tok = gptq_data_utils.get_test_tokens(dataset,
+        dataloader = data_utils.get_test_tokens(dataset,
                                                     seed=args.seed,
-                                                    seqlen=args.seqlen,
+                                                    seqlen=args.seqlen-1,
+                                                    batch_size=args.batch_size,
                                                     model=model_str)
-        nsamples = input_tok.numel() // args.seqlen
-        input_tok = input_tok[0, :(args.seqlen * nsamples)].view(
-            nsamples, args.seqlen)
 
-        # if not args.no_use_cuda_graph:
-        #     model.reset()
-
-        loss_fct = torch.nn.CrossEntropyLoss().cuda()
+        loss_fct = torch.nn.CrossEntropyLoss(reduction='sum').cuda()
         acc_loss = 0.0
-        progress = tqdm(range(nsamples))
-        for ii in progress:
-            input = input_tok[ii, :].cuda().view(1, -1)
-            output = model(input,
-                           use_cache=False,
-                           output_hidden_states=False,
-                           output_attentions=False)[0]
+        total_tokens = 0
+
+        progress = tqdm(enumerate(dataloader), total=len(dataloader))
+        for ii, (input,) in progress:
+            input = input.cuda()  
+            # print(input)
+
+            output = model(
+                input,
+                use_cache=False,
+                output_hidden_states=False,
+                output_attentions=False
+            )[0] 
+
             shift_logits = output[:, :-1, :].contiguous()
             shift_labels = input[:, 1:]
-            loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)),
-                            shift_labels.view(-1))
+
+        
+            loss = loss_fct(
+                shift_logits.view(-1, shift_logits.size(-1)),
+                shift_labels.reshape(-1)
+            )
+
             acc_loss += loss.item()
-            progress.set_description(f"avg_loss = {acc_loss/(ii+1)}")
+            total_tokens += shift_labels.numel()  
+            print(total_tokens)         
 
-        avg_loss = acc_loss / nsamples
+            progress.set_description(f"avg_loss = {acc_loss / total_tokens:.4f}")
 
+
+        avg_loss = acc_loss / total_tokens
         ppl = torch.exp(torch.tensor(avg_loss)).item()
-        glog.info(f'{dataset} perplexity: {ppl}')
+
+        glog.info(f'{dataset} perplexity: {ppl:.4f}')
 
 
 if __name__ == '__main__':
