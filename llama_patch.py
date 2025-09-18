@@ -154,6 +154,9 @@ def incoherence_processing(self, Q,K, QH, KH, K_mean=None):
 
 
 def quantize_q(module, q_orig, dual=True):
+    if not module.q_quant_log:
+        print("Quantizing Q")   
+        module.q_quant_log=True
 
     B, H_q, T, D = q_orig.shape
 
@@ -183,6 +186,9 @@ def quantize_q(module, q_orig, dual=True):
 
 def quantize_k(module, k_orig):
 
+    if not module.k_quant_log:
+        print("Quantizing K")
+        module.k_quant_log=True
 
     B, H_k, T, D = k_orig.shape
 
@@ -207,7 +213,10 @@ def quantize_k(module, k_orig):
 
 def quantize_v(module, v_orig):
 
-  
+    if not module.v_quant_log:
+        print("Quantizing V")
+        module.v_quant_log=True
+
     B, H_v, T, D = v_orig.shape
 
 
@@ -232,7 +241,10 @@ def quantize_v(module, v_orig):
 
 def quantize_p(module, attn_weights, dual=True):
 
-  
+    if not module.p_quant_log:
+        print("Quantizing P")
+        module.p_quant_log=True
+
     original_shape = attn_weights.shape
     attn_weights_2d = attn_weights.reshape(-1, attn_weights.shape[-1])
 
@@ -378,8 +390,7 @@ def llama_fp4_attention_forward(
     
     
     # Initialize FP4Quantizer if not already present
-    if not hasattr(self, 'fp4_quantizer') and hasattr(llama_fp4_attention_forward, 'quantize_enabled'):
-
+    if hasattr(llama_fp4_attention_forward, 'quantize_enabled') and llama_fp4_attention_forward.quantize_enabled and not hasattr(self, 'fp4_quantizer'):
         self.quantize = True
         self.dequant_dtype = self.q_proj.weight.dtype
         self.use_dual_quant_q = os.getenv('FP4_USE_DUAL_QUANT_Q', 'true').lower() == 'true'
@@ -393,6 +404,10 @@ def llama_fp4_attention_forward(
         self.qk_hessians=torch.load("qk_hessians.pt")
         # Initialize FP4Quantizer with appropriate parameters
         self.fp4_quantizer = FP4Quantizer(global_sf_max=1536, device=self.q_proj.weight.device)
+        self.q_quant_log=False
+        self.k_quant_log=False
+        self.v_quant_log=False
+        self.p_quant_log=False
         # Debug: print env var-driven configuration
         print(
             f"FP4_USE_DUAL_QUANT_Q={self.use_dual_quant_q}, "
@@ -452,7 +467,6 @@ def llama_fp4_attention_forward(
        
         Qq_hi, Qq_lo, Qs_hi, Qs_lo = quantize_q(self, query_states, dual=self.use_dual_quant_q)
         query_states = Qq_hi*Qs_hi + Qq_lo*Qs_lo 
-
         Kq, Ks = quantize_k(self, key_states)
         key_states = Kq*Ks 
         if self.mean_before_rope:
