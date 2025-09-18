@@ -12,7 +12,7 @@ from llama_patch import llama_fp4_attention_forward
 import data_utils
 import transformers
 from transformers import AutoModelForCausalLM
-from default_patch import forward
+
 
 torch.set_grad_enabled(False)
 
@@ -84,6 +84,8 @@ def main(args):
             total_tokens += shift_labels.numel()         
 
             progress.set_description(f"avg_loss = {acc_loss / total_tokens:.4f}")
+            del input, output, shift_logits, shift_labels, loss
+            torch.cuda.empty_cache()
 
 
         avg_loss = acc_loss / total_tokens
