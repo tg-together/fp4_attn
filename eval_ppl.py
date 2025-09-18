@@ -12,6 +12,7 @@ from llama_patch import llama_fp4_attention_forward
 import data_utils
 import transformers
 from transformers import AutoModelForCausalLM
+from default_patch import forward
 
 torch.set_grad_enabled(False)
 
@@ -19,25 +20,36 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--seed', default=0, type=int)
 parser.add_argument('--hf_path', default='hfized/quantized_hada_70b', type=str)
 parser.add_argument('--seqlen', default=8192, type=int)
-parser.add_argument('--batch_size', default=5, type=int)
+parser.add_argument('--batch_size', default=10, type=int)
 parser.add_argument('--num_samples', default=100, type=int)
 parser.add_argument('--quantize', action='store_true')
 parser.add_argument('--no_use_flash_attn', action='store_true')
+
+def patch_attention():
+    transformers.models.llama.modeling_llama.LlamaAttention.forward = llama_fp4_attention_forward
+    original_init = transformers.models.llama.modeling_llama.LlamaForCausalLM.__init__
+
+    def patched_init(self, config):
+        original_init(self, config)             
+        self.config._attn_implementation = "eager"
+    transformers.models.llama.modeling_llama.LlamaForCausalLM.__init__ = patched_init
 
 
 def main(args):
     datasets = ['wikitext2']
     model_str= 'meta-llama/Meta-Llama-3-8B'
-    transformers.models.llama.modeling_llama.LlamaAttention.forward = llama_fp4_attention_forward
+    patch_attention()
     llama_fp4_attention_forward.quantize_enabled = args.quantize
     model = AutoModelForCausalLM.from_pretrained(
         model_str, 
         trust_remote_code=True, 
-        device_map="auto", 
-        torch_dtype=torch.bfloat16
+        torch_dtype=torch.bfloat16,
+        device_map="auto"
     )
-    model.eval() 
 
+
+    model.eval() 
+    first_device = next(model.parameters()).device
     for dataset in datasets:
         dataloader = data_utils.get_test_tokens(dataset,
                                                     seed=args.seed,
@@ -45,15 +57,13 @@ def main(args):
                                                     batch_size=args.batch_size,
                                                     model=model_str)
 
-        loss_fct = torch.nn.CrossEntropyLoss(reduction='sum').cuda()
+        loss_fct = torch.nn.CrossEntropyLoss(reduction='sum')
         acc_loss = 0.0
         total_tokens = 0
 
         progress = tqdm(enumerate(dataloader), total=len(dataloader))
         for ii, (input,) in progress:
-            input = input.cuda()  
-            # print(input)
-
+            input = input.to(first_device)  
             output = model(
                 input,
                 use_cache=False,
@@ -71,8 +81,7 @@ def main(args):
             )
 
             acc_loss += loss.item()
-            total_tokens += shift_labels.numel()  
-            print(total_tokens)         
+            total_tokens += shift_labels.numel()         
 
             progress.set_description(f"avg_loss = {acc_loss / total_tokens:.4f}")
 

@@ -126,10 +126,13 @@ def parse_arguments():
 
 
 def patch_attention():
-    """Monkey patch the LlamaAttention forward method with FP4 version."""
-    print("Patching FP4 attention")
     transformers.models.llama.modeling_llama.LlamaAttention.forward = llama_fp4_attention_forward
+    original_init = transformers.models.llama.modeling_llama.LlamaForCausalLM.__init__
 
+    def patched_init(self, config):
+        original_init(self, config)             
+        self.config._attn_implementation = "eager"
+    transformers.models.llama.modeling_llama.LlamaForCausalLM.__init__ = patched_init
 
 
 def main():

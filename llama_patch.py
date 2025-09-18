@@ -293,11 +293,12 @@ def flash_style_attention(
     v: torch.Tensor,
     q_uq: torch.Tensor,
     k_uq: torch.Tensor,
-    attn_mask=None,        # additive mask broadcastable to [B,H,Q,K], entries 0 or -inf
+    attn_mask=None,       
     causal=False,
     block_q: int = 128,
     block_k: int = 256,
 ):
+
     if (attn_mask is not None) and (not torch.is_tensor(attn_mask)):
         raise TypeError(f"attn_mask must be a Tensor or None, got {type(attn_mask)}")
     assert q.ndim == k.ndim == v.ndim == 4
@@ -492,7 +493,7 @@ def llama_fp4_attention_forward(
 
     ##### UNCOMMENT THIS FOR EAGER ATTENTION AND P QUANTIZATION #####
 
-    self.config._attn_implementation = "eager"
+    # self.config._attn_implementation = "eager"
 
     if self.config._attn_implementation != "eager":
         attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
