@@ -40,6 +40,31 @@ def save_qk_hessians(tag=""):
     print(f"Saved Q/K Hessian to {filename}")
 
 
+def save_k_means(tag=""):
+    """Save the running averages of K means per layer.
+    Each mean has shape [1, H_k, 1, D] where H_k is the number of KV heads."""
+    from llama_patch import means_running_averages
+    
+    if not means_running_averages['counts']:
+        print("No K means to save")
+        return
+    
+    # Collect the averages (already computed incrementally)
+    averages = {}
+    for layer_idx in sorted(means_running_averages['counts'].keys()):
+        count = means_running_averages['counts'][layer_idx]
+        if count > 0:
+            averages[f'layer_{layer_idx}'] = {
+                'k_mean_avg': means_running_averages['k_means'][layer_idx],  # Shape: [1, H_k, 1, D]
+            }
+    
+    # Save to file using torch.save
+    filename = f"k_mean_averages_before_rope_{tag}.pt" if tag else "k_mean_averages_before_rope.pt"
+    torch.save(averages, filename)
+    
+    print(f"Saved K means to {filename}")
+
+
 def calculate_perplexity(model, tasks, num_samples=None, device="auto", max_length=2048, **eval_kwargs):
     """Calculate perplexity using lm_eval."""
     
@@ -73,6 +98,7 @@ def parse_arguments():
     parser.add_argument("--num_samples", type=int, default=None, help="Number of samples to evaluate")
     parser.add_argument("--visualize", action="store_true", help="Enable QKV visualization")
     parser.add_argument("--record_hessian", action="store_true", help="Record Q Hessian")
+    parser.add_argument("--record_means", action="store_true", help="Record K means")
     parser.add_argument("--quantize", type=str, default="", help="Selective FP4 quantization; subset of 'QKVP'")
     parser.add_argument("--tag", default="", help="Tag to append to filenames")
     parser.add_argument("--task", nargs='+', default=["pile_10k", "gsm8k"], help="Task(s) to evaluate (can specify multiple)")
@@ -157,6 +183,10 @@ def main():
         args.quantize = False
         llama_fp4_attention_forward.store_hessian = True
 
+    if args.record_means:
+        args.quantize = False
+        llama_fp4_attention_forward.store_means = True
+
     if args.visualize:
         llama_fp4_attention_forward.visualize = args.visualize
 
@@ -181,6 +211,9 @@ def main():
         
         if args.record_hessian:
             save_qk_hessians(args.tag)
+        
+        if args.record_means:
+            save_k_means(args.tag)
         
         # export_memory_snapshot()
         # stop_record_memory_history()

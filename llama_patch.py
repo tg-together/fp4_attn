@@ -35,6 +35,11 @@ hessian_running_averages = {
     'counts': {}    # layer_idx -> count of samples
 }
 
+means_running_averages = {
+    'k_means': {},  # layer_idx -> running average of K means (1 x H_k x 1 x D) 
+    'counts': {}    # layer_idx -> count of samples
+}
+
 
 def store_hessian(query_states, key_states, layer_idx):
 
@@ -69,6 +74,30 @@ def store_hessian(query_states, key_states, layer_idx):
          H_all_k.detach().cpu()) / (count + 1)
     )
     hessian_running_averages['counts'][layer_idx] += 1
+    
+    return
+
+
+def store_means(key_states, layer_idx):
+    """Store running average of K means per layer.
+    Computes mean over batch and tokens, resulting in shape [1, H_k, 1, D]."""
+    
+    key_states = key_states.to(torch.float32)
+    B, H_k, T, D = key_states.shape
+    
+    # Compute mean over batch and tokens: [B, H_k, T, D] -> [1, H_k, 1, D]
+    k_mean = key_states.mean(dim=0, keepdim=True).mean(dim=2, keepdim=True)  # [1, H_k, 1, D]
+    
+    if layer_idx not in means_running_averages['counts']:
+        means_running_averages['k_means'][layer_idx] = torch.zeros_like(k_mean).cpu()
+        means_running_averages['counts'][layer_idx] = 0
+    
+    count = means_running_averages['counts'][layer_idx]
+    means_running_averages['k_means'][layer_idx] = (
+        (means_running_averages['k_means'][layer_idx] * count + 
+         k_mean.detach().cpu()) / (count + 1)
+    )
+    means_running_averages['counts'][layer_idx] += 1
     
     return
 
@@ -401,7 +430,7 @@ def llama_fp4_attention_forward(
         self.ip = os.getenv('IP', 'true').lower() == 'true'
         self.randomization = os.getenv('RANDOMIZATION', 'hadamarad').lower()
         self.hessians=os.getenv('HESSIANS', 'true').lower() == 'true'
-        self.qk_mean_averages_before_rope=torch.load("qk_mean_averages_before_rope.pt")
+        self.qk_mean_averages_before_rope=torch.load("k_mean_averages_before_rope.pt")
         self.qk_hessians=torch.load("qk_hessians.pt")
         # Initialize FP4Quantizer with appropriate parameters
         self.fp4_quantizer = FP4Quantizer(global_sf_max=1536, device=self.q_proj.weight.device)
@@ -486,6 +515,9 @@ def llama_fp4_attention_forward(
 
         if hasattr(llama_fp4_attention_forward, 'store_hessian') and llama_fp4_attention_forward.store_hessian:
             store_hessian(query_states, key_states, self.layer_idx)
+
+        if hasattr(llama_fp4_attention_forward, 'store_means') and llama_fp4_attention_forward.store_means:
+            store_means(key_states, self.layer_idx)
 
 
     attention_interface: Callable = flash_style_attention

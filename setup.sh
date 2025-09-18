@@ -11,7 +11,7 @@ conda create -n fp4 python=3.12 -y
 conda activate fp4
 
 # Install packages
-pip install lm_eval matplotlib
+pip install lm_eval matplotlib glog
 
 
 BASHRC="$HOME/.bashrc"
