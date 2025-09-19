@@ -11,10 +11,10 @@ import socket
 from datetime import datetime, timedelta
 import logging
 import numpy as np
+import os
 
 
-
-def save_qk_hessians(tag=""):
+def save_qk_hessians(model_name, dataset, tag=""):
     """Save the running averages of Q Hessian per layer.
     Each mean has shape [1, H, 1, D] where H is the number of heads."""
     from llama_patch import hessian_running_averages
@@ -33,14 +33,19 @@ def save_qk_hessians(tag=""):
                 'k_hessian': hessian_running_averages['k_means'][layer_idx],  # Shape: [1, H_k, 1, D]
             }
     
+    # Create folder structure
+    model_short = model_name.split('/')[-1] if '/' in model_name else model_name
+    folder_name = f"dumps/{model_short}_{dataset}"
+    os.makedirs(folder_name, exist_ok=True)
+    
     # Save to file using torch.save
-    filename = f"qk_hessians_{tag}.pt" if tag else "qk_hessians.pt"
+    filename = f"dumps/{folder_name}/qk_hessians_{tag}.pt" if tag else f"dumps/{folder_name}/qk_hessians.pt"
     torch.save(averages, filename)
     
     print(f"Saved Q/K Hessian to {filename}")
 
 
-def save_k_means(tag=""):
+def save_k_means(model_name, dataset, tag=""):
     """Save the running averages of K means per layer.
     Each mean has shape [1, H_k, 1, D] where H_k is the number of KV heads."""
     from llama_patch import means_running_averages
@@ -58,8 +63,13 @@ def save_k_means(tag=""):
                 'k_mean_avg': means_running_averages['k_means'][layer_idx],  # Shape: [1, H_k, 1, D]
             }
     
+    # Create folder structure
+    model_short = model_name.split('/')[-1] if '/' in model_name else model_name
+    folder_name = f"dumps/{model_short}_{dataset}"
+    os.makedirs(folder_name, exist_ok=True)
+    
     # Save to file using torch.save
-    filename = f"k_mean_averages_before_rope_{tag}.pt" if tag else "k_mean_averages_before_rope.pt"
+    filename = f"dumps/{folder_name}/k_mean_averages_before_rope_{tag}.pt" if tag else f"dumps/{folder_name}/k_mean_averages_before_rope.pt"
     torch.save(averages, filename)
     
     print(f"Saved K means to {filename}")
@@ -102,6 +112,7 @@ def parse_arguments():
     parser.add_argument("--quantize", type=str, default="", help="Selective FP4 quantization; subset of 'QKVP'")
     parser.add_argument("--tag", default="", help="Tag to append to filenames")
     parser.add_argument("--task", nargs='+', default=["pile_10k", "gsm8k"], help="Task(s) to evaluate (can specify multiple)")
+    parser.add_argument("--hessian_dataset", type=str, default="wikitext2", help="Dataset name to load hessians from (e.g., 'pile_10k')")
     
     # Parse known args to capture additional eval arguments
     args, unknown_args = parser.parse_known_args()
@@ -179,6 +190,12 @@ def main():
     llama_patch.quantize_enabled = args.quantize.upper() if isinstance(args.quantize, str) else args.quantize
     llama_patch.visualize = args.visualize
 
+    # Set hessian dataset path for loading
+
+    model_short = args.model.split('/')[-1] if '/' in args.model else args.model
+    llama_patch.hessian_folder = f"dumps/{model_short}_{args.hessian_dataset}"
+
+
     if args.record_hessian:
         args.quantize = False
         llama_fp4_attention_forward.store_hessian = True
@@ -210,10 +227,12 @@ def main():
                 )
         
         if args.record_hessian:
-            save_qk_hessians(args.tag)
+            task_str = "_".join(args.task) if len(args.task) > 1 else args.task[0]
+            save_qk_hessians(args.model, task_str, args.tag)
         
         if args.record_means:
-            save_k_means(args.tag)
+            task_str = "_".join(args.task) if len(args.task) > 1 else args.task[0]
+            save_k_means(args.model, task_str, args.tag)
         
         # export_memory_snapshot()
         # stop_record_memory_history()

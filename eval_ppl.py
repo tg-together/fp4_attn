@@ -16,14 +16,83 @@ from transformers import AutoModelForCausalLM
 
 torch.set_grad_enabled(False)
 
+
+def save_qk_hessians(model_name, dataset, tag=""):
+    """Save the running averages of Q Hessian per layer.
+    Each mean has shape [1, H, 1, D] where H is the number of heads."""
+    from llama_patch import hessian_running_averages
+    
+    if not hessian_running_averages['counts']:
+        print("No Q/K Hessian averages to save")
+        return
+    
+    # Collect the averages (already computed incrementally)
+    averages = {}
+    for layer_idx in sorted(hessian_running_averages['counts'].keys()):
+        count = hessian_running_averages['counts'][layer_idx]
+        if count > 0:
+            averages[f'layer_{layer_idx}'] = {
+                'q_hessian': hessian_running_averages['q_means'][layer_idx],  # Shape: [1, H_q, 1, D]
+                'k_hessian': hessian_running_averages['k_means'][layer_idx],  # Shape: [1, H_k, 1, D]
+            }
+    
+    # Create folder structure
+    model_short = model_name.split('/')[-1] if '/' in model_name else model_name
+    folder_name = f"dumps/{model_short}_{dataset}"
+    os.makedirs(folder_name, exist_ok=True)
+    
+    # Save to file using torch.save
+    filename = f"{folder_name}/qk_hessians_{tag}.pt" if tag else f"{folder_name}/qk_hessians.pt"
+    torch.save(averages, filename)
+    
+    print(f"Saved Q/K Hessian to {filename}")
+
+
+def save_k_means(model_name, dataset, tag=""):
+    """Save the running averages of K means per layer.
+    Each mean has shape [1, H_k, 1, D] where H_k is the number of KV heads."""
+    from llama_patch import means_running_averages
+    
+    if not means_running_averages['counts']:
+        print("No K means to save")
+        return
+    
+    # Collect the averages (already computed incrementally)
+    averages = {}
+    for layer_idx in sorted(means_running_averages['counts'].keys()):
+        count = means_running_averages['counts'][layer_idx]
+        if count > 0:
+            averages[f'layer_{layer_idx}'] = {
+                'k_mean_avg': means_running_averages['k_means'][layer_idx],  # Shape: [1, H_k, 1, D]
+            }
+    
+    # Create folder structure
+    model_short = model_name.split('/')[-1] if '/' in model_name else model_name
+    folder_name = f"dumps/{model_short}_{dataset}"
+    os.makedirs(folder_name, exist_ok=True)
+    
+    # Save to file using torch.save
+    filename = f"{folder_name}/k_mean_averages_before_rope_{tag}.pt" if tag else f"{folder_name}/k_mean_averages_before_rope.pt"
+    torch.save(averages, filename)
+    
+    print(f"Saved K means to {filename}")
+
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--seed', default=0, type=int)
 parser.add_argument('--hf_path', default='hfized/quantized_hada_70b', type=str)
 parser.add_argument('--seqlen', default=8192, type=int)
 parser.add_argument('--batch_size', default=10, type=int)
-parser.add_argument('--num_samples', default=100, type=int)
+parser.add_argument('--num_samples', default=50, type=int)
 parser.add_argument('--quantize', action='store_true')
 parser.add_argument('--no_use_flash_attn', action='store_true')
+parser.add_argument("--dataset", nargs='+', default=["wikitext2"], help="Task(s) to evaluate (can specify multiple)")
+parser.add_argument("--model", default="meta-llama/Meta-Llama-3-8B", type=str)
+parser.add_argument("--record_hessian", action="store_true", help="Record Q/K Hessian")
+parser.add_argument("--record_means", action="store_true", help="Record K means")
+parser.add_argument("--tag", default="", help="Tag to append to filenames")
+parser.add_argument("--hessian_dataset", type=str, default="wikitext2", help="Dataset name to load hessians from (e.g., 'wikitext2')")
+
 
 def patch_attention():
     transformers.models.llama.modeling_llama.LlamaAttention.forward = llama_fp4_attention_forward
@@ -36,8 +105,25 @@ def patch_attention():
 
 
 def main(args):
-    datasets = ['wikitext2']
-    model_str= 'meta-llama/Meta-Llama-3-8B'
+    datasets = args.dataset
+    model_str= args.model
+    
+    # Configure llama_patch with hessian settings
+    import llama_patch
+    
+
+    model_short = model_str.split('/')[-1] if '/' in model_str else model_str
+    llama_patch.hessian_folder = f"dumps/{model_short}_{args.hessian_dataset}"
+
+    
+    if args.record_hessian:
+        args.quantize = False
+        llama_fp4_attention_forward.store_hessian = True
+    
+    if args.record_means:
+        args.quantize = False
+        llama_fp4_attention_forward.store_means = True
+    
     patch_attention()
     llama_fp4_attention_forward.quantize_enabled = args.quantize
     model = AutoModelForCausalLM.from_pretrained(
@@ -50,17 +136,23 @@ def main(args):
 
     model.eval() 
     first_device = next(model.parameters()).device
+    
     for dataset in datasets:
+        print("Dataset: ", dataset)
+        # Use train data when recording hessian or means
+        use_train = args.record_hessian or args.record_means
         dataloader = data_utils.get_test_tokens(dataset,
+                                                    nsamples=args.num_samples,
                                                     seed=args.seed,
                                                     seqlen=args.seqlen-1,
                                                     batch_size=args.batch_size,
-                                                    model=model_str)
+                                                    model=model_str,
+                                                    train=use_train)
 
         loss_fct = torch.nn.CrossEntropyLoss(reduction='sum')
         acc_loss = 0.0
         total_tokens = 0
-
+        print("Length of dataloader: ", len(dataloader))
         progress = tqdm(enumerate(dataloader), total=len(dataloader))
         for ii, (input,) in progress:
             input = input.to(first_device)  
@@ -84,7 +176,7 @@ def main(args):
             total_tokens += shift_labels.numel()         
 
             progress.set_description(f"avg_loss = {acc_loss / total_tokens:.4f}")
-            del input, output, shift_logits, shift_labels, loss
+            del output, shift_logits, shift_labels, loss
             torch.cuda.empty_cache()
 
 
@@ -92,6 +184,13 @@ def main(args):
         ppl = torch.exp(torch.tensor(avg_loss)).item()
 
         glog.info(f'{dataset} perplexity: {ppl:.4f}')
+        
+        # Save hessians and means after evaluation
+        if args.record_hessian:
+            save_qk_hessians(model_str, dataset, args.tag)
+        
+        if args.record_means:
+            save_k_means(model_str, dataset, args.tag)
 
 
 if __name__ == '__main__':

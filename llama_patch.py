@@ -40,6 +40,9 @@ means_running_averages = {
     'counts': {}    # layer_idx -> count of samples
 }
 
+# Global variable to store the hessian folder path
+hessian_folder = None
+
 
 def store_hessian(query_states, key_states, layer_idx):
 
@@ -430,8 +433,25 @@ def llama_fp4_attention_forward(
         self.ip = os.getenv('IP', 'true').lower() == 'true'
         self.randomization = os.getenv('RANDOMIZATION', 'hadamarad').lower()
         self.hessians=os.getenv('HESSIANS', 'true').lower() == 'true'
-        self.qk_mean_averages_before_rope=torch.load("k_mean_averages_before_rope.pt")
-        self.qk_hessians=torch.load("qk_hessians.pt")
+        
+        # Load from the correct folder based on hessian_folder
+        if self.hessians:
+            global hessian_folder
+            qk_hessian_file = f"{hessian_folder}/qk_hessians.pt"
+            if os.path.exists(qk_hessian_file):
+                self.qk_hessians=torch.load(qk_hessian_file)
+            else:
+                raise ValueError(f"QK Hessian file not found: {qk_hessian_file}")
+    
+        
+        if self.mean_before_rope:
+            k_mean_file = f"{hessian_folder}/k_mean_averages_before_rope.pt"
+            if os.path.exists(k_mean_file):
+                self.qk_mean_averages_before_rope=torch.load(k_mean_file)
+            else:
+                raise ValueError(f"K mean file not found: {k_mean_file}")
+        
+            
         # Initialize FP4Quantizer with appropriate parameters
         self.fp4_quantizer = FP4Quantizer(global_sf_max=1536, device=self.q_proj.weight.device)
         self.q_quant_log=False
@@ -465,7 +485,8 @@ def llama_fp4_attention_forward(
 
     cos, sin = position_embeddings
 
-
+    if hasattr(llama_fp4_attention_forward, 'store_means') and llama_fp4_attention_forward.store_means:
+        store_means(key_states, self.layer_idx)
     
     query_states_uq, key_states_uq = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
@@ -474,14 +495,10 @@ def llama_fp4_attention_forward(
         key_mean=torch.zeros_like(key_states).to(key_states.device)
 
         if self.mean_before_rope:
-
-            
+            # Check if k_mean data exists
             key_mean=self.qk_mean_averages_before_rope[f'layer_{self.layer_idx}']['k_mean_avg'].to(key_states.device)
             key_states=key_states-key_mean
-
-
             key_mean, key_states = apply_rotary_pos_emb(key_mean, key_states, cos, sin)
-
             query_states=query_states_uq
         
         else:
@@ -491,10 +508,10 @@ def llama_fp4_attention_forward(
 
 
         if self.ip:
+            # Check if hessian data exists
             q_hessian=self.qk_hessians[f'layer_{self.layer_idx}']['q_hessian'].to(query_states.device)
             k_hessian=self.qk_hessians[f'layer_{self.layer_idx}']['k_hessian'].to(key_states.device)
             query_states, key_states, key_mean= incoherence_processing(self, query_states.to(torch.float64), key_states.to(torch.float64), q_hessian.to(torch.float64), k_hessian.to(torch.float64), key_mean.to(torch.float64))
-       
         Qq_hi, Qq_lo, Qs_hi, Qs_lo = quantize_q(self, query_states, dual=self.use_dual_quant_q)
         query_states = Qq_hi*Qs_hi + Qq_lo*Qs_lo 
         Kq, Ks = quantize_k(self, key_states)
@@ -515,9 +532,6 @@ def llama_fp4_attention_forward(
 
         if hasattr(llama_fp4_attention_forward, 'store_hessian') and llama_fp4_attention_forward.store_hessian:
             store_hessian(query_states, key_states, self.layer_idx)
-
-        if hasattr(llama_fp4_attention_forward, 'store_means') and llama_fp4_attention_forward.store_means:
-            store_means(key_states, self.layer_idx)
 
 
     attention_interface: Callable = flash_style_attention

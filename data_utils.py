@@ -7,201 +7,104 @@ import torch
 from datasets import load_dataset
 from transformers import AutoTokenizer
 from torch.utils.data import TensorDataset, DataLoader
-
+import os
 
 def set_seed(seed):
     np.random.seed(seed)
     torch.random.manual_seed(seed)
 
 
-def get_wikitext2(nsamples, seed, seqlen, batch_size, model):
+def stream_until_tokens(dataset_iter, tokenizer, target_tokens):
+    """Stream dataset until we get target_tokens number of tokens."""
+    texts = []
+    total_tokens = 0
+    for sample in dataset_iter:
+        texts.append(sample['text'])
+        total_tokens += len(tokenizer.encode(sample['text']))
+        if total_tokens >= target_tokens:
+            break
+    return tokenizer("\n\n".join(texts), return_tensors='pt')['input_ids']
 
-    testdata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test')
 
-    
-    tokenizer = AutoTokenizer.from_pretrained(model, use_fast=True)
-  
-    testenc = tokenizer("\n\n".join(testdata['text']), return_tensors='pt')['input_ids']
-
-    n_samples = testenc.shape[1]//seqlen
-    
-
-    testenc = testenc[0, 1:(n_samples*seqlen)+1].view(n_samples,-1)
-
+def create_dataloader(tokenenc, n_samples, seqlen, batch_size, tokenizer):
+    """Add BOS token and create dataloader from tokenized data."""
+    tokenenc = tokenenc[0, 1:(n_samples*seqlen)+1].view(n_samples, -1)
     sos_token = tokenizer.bos_token_id
-    testenc = torch.cat((torch.tensor([sos_token]*n_samples).unsqueeze(1), testenc), 1)
-
-    dataset = TensorDataset(testenc)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
-
-    return dataloader
+    tokenenc = torch.cat((torch.tensor([sos_token]*n_samples).unsqueeze(1), tokenenc), 1)
+    dataset = TensorDataset(tokenenc)
+    return DataLoader(dataset, batch_size=batch_size, shuffle=False)
 
 
-def get_ptb(nsamples, seed, seqlen, model):
-    from datasets import load_dataset
-    traindata = load_dataset('ptb_text_only', 'penn_treebank', split='train')
-    valdata = load_dataset('ptb_text_only',
-                           'penn_treebank',
-                           split='validation')
-
-    from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False)
-    trainenc = tokenizer("\n\n".join(traindata['sentence']),
-                         return_tensors='pt')
-    testenc = tokenizer("\n\n".join(valdata['sentence']), return_tensors='pt')
-
-    import random
-    random.seed(seed)
-    trainloader = []
-    for _ in range(nsamples):
-        i = random.randint(0, trainenc.input_ids.shape[1] - seqlen - 1)
-        j = i + seqlen
-        inp = trainenc.input_ids[:, i:j]
-        tar = inp.clone()
-        tar[:, :-1] = -100
-        trainloader.append((inp, tar))
-    return trainloader, testenc
-
-
-def get_c4(nsamples, seed, seqlen, model):
-    from datasets import load_dataset
-    traindata = load_dataset(
-        'allenai/c4',
-        data_files={'train': 'en/c4-train.00000-of-01024.json.gz'},
-        split='train')
-    valdata = load_dataset(
-        'allenai/c4',
-        data_files={'validation': 'en/c4-validation.00000-of-00008.json.gz'},
-        split='validation')
-    from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False)
-
-    import random
-    random.seed(seed)
-    trainloader = []
-    for _ in range(nsamples):
-        while True:
-            i = random.randint(0, len(traindata) - 1)
-            trainenc = tokenizer(traindata[i]['text'], return_tensors='pt')
-            if trainenc.input_ids.shape[1] >= seqlen:
-                break
-        i = random.randint(0, trainenc.input_ids.shape[1] - seqlen - 1)
-        j = i + seqlen
-        inp = trainenc.input_ids[:, i:j]
-        tar = inp.clone()
-        tar[:, :-1] = -100
-        trainloader.append((inp, tar))
-
-    import random
-    random.seed(0)
-    valenc = []
-    for _ in range(256):
-        while True:
-            i = random.randint(0, len(valdata) - 1)
-            tmp = tokenizer(valdata[i]['text'], return_tensors='pt')
-            if tmp.input_ids.shape[1] >= seqlen:
-                break
-        i = random.randint(0, tmp.input_ids.shape[1] - seqlen - 1)
-        j = i + seqlen
-        valenc.append(tmp.input_ids[:, i:j])
-    valenc = torch.hstack(valenc)
-
-    class TokenizerWrapper:
-
-        def __init__(self, input_ids):
-            self.input_ids = input_ids
-
-    valenc = TokenizerWrapper(valenc)
-
-    return trainloader, valenc
-
-
-def get_ptb_new(nsamples, seed, seqlen, model):
-    from datasets import load_dataset
-    traindata = load_dataset('ptb_text_only', 'penn_treebank', split='train')
-    testdata = load_dataset('ptb_text_only', 'penn_treebank', split='test')
-
-    from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False)
-    trainenc = tokenizer(" ".join(traindata['sentence']), return_tensors='pt')
-    testenc = tokenizer(" ".join(testdata['sentence']), return_tensors='pt')
-
-    import random
-    random.seed(seed)
-    trainloader = []
-    for _ in range(nsamples):
-        i = random.randint(0, trainenc.input_ids.shape[1] - seqlen - 1)
-        j = i + seqlen
-        inp = trainenc.input_ids[:, i:j]
-        tar = inp.clone()
-        tar[:, :-1] = -100
-        trainloader.append((inp, tar))
-    return trainloader, testenc
-
-
-def get_c4_new(nsamples, seed, seqlen, model):
-    from datasets import load_dataset
-    traindata = load_dataset(
-        'allenai/c4',
-        data_files={'train': 'en/c4-train.00000-of-01024.json.gz'},
-        split='train')
-    valdata = load_dataset(
-        'allenai/c4',
-        data_files={'validation': 'en/c4-validation.00000-of-00008.json.gz'},
-        split='validation')
-
-    from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False)
-
-    import random
-    random.seed(seed)
-    trainloader = []
-    for _ in range(nsamples):
-        while True:
-            i = random.randint(0, len(traindata) - 1)
-            trainenc = tokenizer(traindata[i]['text'], return_tensors='pt')
-            if trainenc.input_ids.shape[1] >= seqlen:
-                break
-        i = random.randint(0, trainenc.input_ids.shape[1] - seqlen - 1)
-        j = i + seqlen
-        inp = trainenc.input_ids[:, i:j]
-        tar = inp.clone()
-        tar[:, :-1] = -100
-        trainloader.append((inp, tar))
-
-    valenc = tokenizer(' '.join(valdata[:1100]['text']), return_tensors='pt')
-    valenc = valenc.input_ids[:, :(256 * seqlen)]
-
-    class TokenizerWrapper:
-
-        def __init__(self, input_ids):
-            self.input_ids = input_ids
-
-    valenc = TokenizerWrapper(valenc)
-
-    return trainloader, valenc
-
-
-def get_loaders(name, nsamples=128, seed=0, seqlen=2048, model=''):
-    if 'wikitext2' in name:
-        return get_wikitext2(nsamples, seed, seqlen, model)
-    if 'ptb' in name:
-        if 'new' in name:
-            return get_ptb_new(nsamples, seed, seqlen, model)
-        return get_ptb(nsamples, seed, seqlen, model)
-    if 'c4' in name:
-        if 'new' in name:
-            return get_c4_new(nsamples, seed, seqlen, model)
-        return get_c4(nsamples, seed, seqlen, model)
-
-
-def get_test_tokens(name, seed=0, seqlen=2048, batch_size=10, model=''):
-    train_samples = 0
-    if name == 'wikitext2':
-        return get_wikitext2(train_samples, seed, seqlen,batch_size, model)
-    elif name == 'c4':
-        return get_c4(train_samples, seed, seqlen, model)[1].input_ids
-    elif name == 'c4_new':
-        return get_c4_new(train_samples, seed, seqlen, model)[1].input_ids
+def get_wikitext2(nsamples, seed, seqlen, batch_size, model, split='test'):
+    tokenizer = AutoTokenizer.from_pretrained(model, use_fast=True)
+    
+    if split == 'train':
+        # Stream train data for 1000 samples
+        traindata = load_dataset('wikitext', 'wikitext-103-raw-v1', split='train', streaming=True)
+        testenc = stream_until_tokens(iter(traindata), tokenizer, seqlen * 1000)
+        n_samples = min(1000, testenc.shape[1]//seqlen)
     else:
-        raise Exception
+        testdata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test')
+        testenc = tokenizer("\n\n".join(testdata['text']), return_tensors='pt')['input_ids']
+        n_samples = testenc.shape[1]//seqlen
+    
+    return create_dataloader(testenc, n_samples, seqlen, batch_size, tokenizer)
+
+
+def get_c4(n_samples, seed, seqlen, batch_size, model, split='validation'):
+    tokenizer = AutoTokenizer.from_pretrained(model, use_fast=True)
+    
+    if split == 'train':
+        # Stream train data for 1000 samples
+        traindata = load_dataset('allenai/c4','en',split='train', streaming=True)
+        valenc = stream_until_tokens(iter(traindata), tokenizer, seqlen * 1000)
+        n_samples = min(1000, valenc.shape[1]//seqlen)
+    else:
+        if os.path.exists("dumps/c4_valid_joined_ids.pt"):
+            valenc = torch.load("dumps/c4_valid_joined_ids.pt")
+        else:
+            valdata = load_dataset(
+                'allenai/c4',
+                data_files={'validation': 'en/c4-validation.00000-of-00008.json.gz'},
+                split='validation')
+            valenc = tokenizer("\n\n".join(valdata['text']), return_tensors='pt')['input_ids']
+            torch.save(valenc, "dumps/c4_valid_joined_ids.pt")
+
+    
+    return create_dataloader(valenc, n_samples, seqlen, batch_size, tokenizer)
+
+
+def get_pile(n_samples, seed, seqlen, batch_size, model, split='validation'):
+    tokenizer = AutoTokenizer.from_pretrained(model, use_fast=True)
+    
+    if split == 'train':
+        # Stream train data for 1000 samples
+        traindata = load_dataset("monology/pile-uncopyrighted", split='train', streaming=True)
+        valenc = stream_until_tokens(iter(traindata), tokenizer, seqlen * 1000)
+        n_samples = min(1000, valenc.shape[1]//seqlen)
+    else:
+        if os.path.exists("dumps/pile_test_joined_ids.pt"):
+            valenc = torch.load("dumps/pile_test_joined_ids.pt")
+        else:
+            pile = load_dataset(
+                "monology/pile-uncopyrighted",
+                data_files={"test": "test.jsonl.zst"},
+                split="test",
+            )
+            pile=pile[:10000]
+            valenc = tokenizer("\n\n".join(pile['text']), return_tensors='pt')['input_ids']
+            torch.save(valenc, "dumps/pile_test_joined_ids.pt")
+
+    
+    return create_dataloader(valenc, n_samples, seqlen, batch_size, tokenizer)
+
+
+def get_test_tokens(name, nsamples=0, seed=0, seqlen=2048, batch_size=10, model='', train=False):
+    split = 'train' if train else 'test'
+    
+    if name == 'wikitext2':
+        return get_wikitext2(nsamples, seed, seqlen, batch_size, model, split=split)
+    elif name == 'c4':
+        return get_c4(nsamples, seed, seqlen, batch_size, model, split=split)
+    elif name == 'pile':
+        return get_pile(nsamples, seed, seqlen, batch_size, model, split=split)
