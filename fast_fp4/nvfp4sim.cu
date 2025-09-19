@@ -459,7 +459,7 @@ __global__ void f32_to_nvf4_nosearch_kernel(
         min_loss = fminf(min_loss, __shfl_xor_sync(0xffffffff, min_loss, i));
     }
 
-    if (loss == min_loss) {
+    if (threadIdx.x == 0 || threadIdx.x == 16) {
         // we have the best scale! write it out
         pxqout[groupIdx] = xqs.u64;
         pxsout[groupIdx] = xscale_f8;

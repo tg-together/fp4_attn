@@ -281,7 +281,7 @@ def quantize_p(module, attn_weights, dual=True):
     attn_weights_2d = attn_weights.reshape(-1, attn_weights.shape[-1])
 
     if dual:
-        Aq_hi, Aq_lo, As_hi, As_lo = module.fp4_quantizer.dual_nvfp4(attn_weights_2d, search=True)
+        Aq_hi, Aq_lo, As_hi, As_lo = module.fp4_quantizer.dual_nvfp4(attn_weights_2d, search=False)
 
         Aq_hi = Aq_hi.reshape(original_shape)
         Aq_lo = Aq_lo.reshape(original_shape)
@@ -291,7 +291,7 @@ def quantize_p(module, attn_weights, dual=True):
 
     else:
 
-        Aq_hi,As_hi = module.fp4_quantizer.single_nvfp4(attn_weights_2d, search=True)
+        Aq_hi,As_hi = module.fp4_quantizer.single_nvfp4(attn_weights_2d, search=False)
         Aq_hi = Aq_hi.reshape(original_shape)
         As_hi = As_hi.reshape(*original_shape[:-1],1)
         Aq_lo = torch.zeros_like(Aq_hi)
@@ -514,8 +514,11 @@ def llama_fp4_attention_forward(
                 q_hessian=self.qk_hessians[f'layer_{self.layer_idx}']['q_hessian'].to(query_states.device).to(torch.float64)
                 k_hessian=self.qk_hessians[f'layer_{self.layer_idx}']['k_hessian'].to(key_states.device).to(torch.float64)
             query_states, key_states, key_mean= incoherence_processing(self, query_states.to(torch.float64), key_states.to(torch.float64), q_hessian, k_hessian, key_mean.to(torch.float64))
+        
         Qq_hi, Qq_lo, Qs_hi, Qs_lo = quantize_q(self, query_states, dual=self.use_dual_quant_q)
         query_states = Qq_hi*Qs_hi + Qq_lo*Qs_lo 
+
+
         Kq, Ks = quantize_k(self, key_states)
         key_states = Kq*Ks 
         if self.mean_before_rope:
