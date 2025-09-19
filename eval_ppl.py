@@ -168,7 +168,7 @@ def main(args):
 
         
             loss = loss_fct(
-                shift_logits.view(-1, shift_logits.size(-1)),
+                shift_logits.view(-1, shift_logits.size(-1)).to(torch.float32),
                 shift_labels.reshape(-1)
             )
 

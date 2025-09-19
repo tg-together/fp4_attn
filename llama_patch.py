@@ -391,11 +391,11 @@ def flash_style_attention(
             p = torch.exp(scores - m_new)
 
 
-            if module.layer_idx != 0 and hasattr(module, 'quantize') and module.quantize == True:
-                p_norm = p / (torch.sum(p, dim=-1, keepdim=True) + 1e-10)
-                Aq_hi, Aq_lo, As_hi, As_lo = quantize_p(module, p_norm, module.use_dual_quant_attn)
-                p_quant = (Aq_hi*As_hi+Aq_lo*As_lo)
-                p = p_quant * (torch.sum(p, dim=-1, keepdim=True) + 1e-10)
+            # if module.layer_idx != 0 and hasattr(module, 'quantize') and module.quantize == True:
+            #     p_norm = p / (torch.sum(p, dim=-1, keepdim=True) + 1e-10)
+            #     Aq_hi, Aq_lo, As_hi, As_lo = quantize_p(module, p_norm, module.use_dual_quant_attn)
+            #     p_quant = (Aq_hi*As_hi+Aq_lo*As_lo)
+            #     p = p_quant * (torch.sum(p, dim=-1, keepdim=True) + 1e-10)
 
             
             l   = exp_scale * l   + torch.sum(p, dim=-1, keepdim=True)
@@ -508,9 +508,11 @@ def llama_fp4_attention_forward(
 
 
         if self.ip:
-            # Check if hessian data exists
-            q_hessian=self.qk_hessians[f'layer_{self.layer_idx}']['q_hessian'].to(query_states.device)
-            k_hessian=self.qk_hessians[f'layer_{self.layer_idx}']['k_hessian'].to(key_states.device)
+            q_hessian=None
+            k_hessian=None
+            if self.hessians:
+                q_hessian=self.qk_hessians[f'layer_{self.layer_idx}']['q_hessian'].to(query_states.device)
+                k_hessian=self.qk_hessians[f'layer_{self.layer_idx}']['k_hessian'].to(key_states.device)
             query_states, key_states, key_mean= incoherence_processing(self, query_states.to(torch.float64), key_states.to(torch.float64), q_hessian.to(torch.float64), k_hessian.to(torch.float64), key_mean.to(torch.float64))
         Qq_hi, Qq_lo, Qs_hi, Qs_lo = quantize_q(self, query_states, dual=self.use_dual_quant_q)
         query_states = Qq_hi*Qs_hi + Qq_lo*Qs_lo 
