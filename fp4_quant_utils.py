@@ -115,12 +115,16 @@ class FP4Quantizer(nn.Module):
         
         if _reshaped:
             reconstructed_f32 = reconstructed_f32.reshape(T, H, D)
+            # 16-packed FP4 uint64
+            quantized_data = quantized_data.reshape(T, H, D // 16).contiguous()
+            # 2-packed FP4 uint8
+            quantized_data = quantized_data.view(torch.uint8).view(T, H, D // 2).contiguous()
 
 
         if self.global_sf_max is not None:
-            return reconstructed_f32, global_sf
+            return reconstructed_f32, quantized_data, global_sf
         else:
-            return reconstructed_f32, torch.ones(*([1] * reconstructed_f32.ndim),device=reconstructed_f32.device)
+            return reconstructed_f32, quantized_data, torch.ones(*([1] * reconstructed_f32.ndim),device=reconstructed_f32.device)
 
 
 
@@ -128,12 +132,12 @@ class FP4Quantizer(nn.Module):
 
 
 
-        x_hi_q, scales_hi = self.single_nvfp4(x, search, transpose) 
+        x_hi_q, x_hi_q_int8, scales_hi = self.single_nvfp4(x, search, transpose) 
         
 
-        x_lo_q, scales_lo = self.single_nvfp4(x - x_hi_q*scales_hi, search, transpose)
+        x_lo_q, x_lo_q_int8, scales_lo = self.single_nvfp4(x - x_hi_q*scales_hi, search, transpose)
 
-        return x_hi_q, x_lo_q, scales_hi, scales_lo
+        return x_hi_q, x_lo_q, x_hi_q_int8, x_lo_q_int8, scales_hi, scales_lo
 
 
         

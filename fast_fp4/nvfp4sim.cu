@@ -82,13 +82,16 @@ __device__ uint8_t f32_to_f4(float x, float y) {
     uint32_t uy = f32_as_u32(y) + (1 << 21);
     ux = ((ux >> 22) & 7) | ((ux >> 28) & 8);
     uy = ((uy >> 22) & 7) | ((uy >> 28) & 8);
-    return (uint8_t)(ux | (uy << 4));
+    // return (uint8_t)(ux | (uy << 4));
+    return (uint8_t)(ux << 4 | uy);
 }
 
 __device__ float2 f4_to_f32(uint8_t z) {
     const float ISCALE = 8.507059173023462e+37f;
-    uint32_t ux = z & 15;
-    uint32_t uy = (z >> 4) & 15;
+    // uint32_t ux = z & 15;
+    // uint32_t uy = (z >> 4) & 15;
+    uint32_t ux = (z >> 4) & 15;
+    uint32_t uy = z & 15;
     ux = ((ux & 7) << 22) | ((ux & 8) << 28);
     uy = ((uy & 7) << 22) | ((uy & 8) << 28);
     return make_float2(u32_as_f32(ux) * ISCALE, u32_as_f32(uy) * ISCALE);
@@ -126,6 +129,7 @@ __global__ void f32_to_nvf4_kernel(
     } xqs;
     #pragma unroll
     for (int64_t i = 0; i < 8; i++) {
+        // 16-packed FP4 (f32_to_f4 packs 2 FP4's per uint8_t)
         xqs.u8[i] = f32_to_f4(x[2*i+0] * xscale_inv, x[2*i+1] * xscale_inv);
         float2 xhat = f4_to_f32(xqs.u8[i]);
         loss += (xhat.x * xscale - x[2*i+0]) * (xhat.x * xscale - x[2*i+0]);
