@@ -2,6 +2,8 @@
 import argparse
 import json
 from lm_eval import simple_evaluate
+import lm_eval
+print(f"lm_eval path: {lm_eval.__file__}")
 from transformers import AutoModelForCausalLM, AutoConfig
 import transformers
 import torch
@@ -78,15 +80,19 @@ def save_k_means(model_name, dataset, tag=""):
 def calculate_perplexity(model, tasks, num_samples=None, device="auto", max_length=2048, **eval_kwargs):
     """Calculate perplexity using lm_eval."""
     
-    # Base arguments
+    # Base arguments max_length={max_length},
     base_args = {
         "model": "hf",
-        "model_args": f"pretrained={model},max_length={max_length},trust_remote_code=True",
+        "model_args": f"pretrained={model},trust_remote_code=True",
         "tasks": tasks,
-        "num_fewshot": 0,
-        "batch_size": 20,
+        "batch_size": 1,
         "device": device,
-        "confirm_run_unsafe_code":True
+        "confirm_run_unsafe_code":True,
+        "apply_chat_template":True,
+        "fewshot_as_multiturn":True,
+        "num_fewshot":16,
+        # "show_config":True,
+        "log_samples":True
     }
     
     # Add limit if specified
@@ -95,7 +101,7 @@ def calculate_perplexity(model, tasks, num_samples=None, device="auto", max_leng
     
     # Merge with additional eval arguments
     base_args.update(eval_kwargs)
-    
+    print (base_args)
     results = simple_evaluate(**base_args)
     return results
 
@@ -210,12 +216,12 @@ def main():
     if args.quantize:
         llama_fp4_attention_forward.quantize_enabled = args.quantize.upper() if isinstance(args.quantize, str) else args.quantize
 
-    # if args.quantize or args.visualize:
-    patch_attention()   ## Enable FP4 attention
+    if args.quantize or args.visualize or args.record_hessian or args.record_means:
+        patch_attention()   ## Enable FP4 attention
 
     # start_record_memory_history()
 
-    for max_length in [2048]:
+    for max_length in [32000]:
         with torch.no_grad():
             results = calculate_perplexity(
                 model=args.model,
@@ -236,27 +242,77 @@ def main():
         
         # export_memory_snapshot()
         # stop_record_memory_history()
-        print(f"Model: {args.model}")
-        print(f"Max length: {max_length}")
-        print(f"Quantize: {args.quantize}")
-        print(f"Tag: {args.tag}")
-        for task in args.task:
-            print(f"Task: {task}")
-            try:
-                print(f"Metrics: {results['results'][task]}")
-            except:
-                if results is not None:
-                    print(f"Metrics: {results['results']}")
-
+        
+        # Print results using a similar format to standard lm-evaluation-harness
+        if results is not None:
+            # Print model info similar to standard CLI
+            batch_sizes = ",".join(map(str, results["config"].get("batch_sizes", [])))
+            print(
+                f"{args.model} (pretrained={args.model}), gen_kwargs: (None), limit: {args.num_samples}, num_fewshot: 0, "
+                f"batch_size: 20{f' ({batch_sizes})' if batch_sizes else ''}"
+            )
             
-            # # Special formatting for pile_10k metrics
-            # if task == "pile_10k":
-            #     print_pile_10k_metrics(
-            #         metrics=results['results'][task],
-            #         tag=args.tag,
-            #         model=args.model,
-            #         quantize=args.quantize
-            #     )
+            # Print formatted table manually
+            def print_results_table(result_dict):
+                """Print results in a table format similar to lm-evaluation-harness"""
+                print(f"{'Tasks':<25}|{'Version':<7}|{'Filter':<15}|{'n-shot':<6}|{'Metric':<11}|{'':<3}|{'Value':<6}|{'':<3}|{'Stderr':<6}|")
+                print("-" * 90)
+                
+                for task_name in result_dict["results"]:
+                    task_results = result_dict["results"][task_name]
+                    version = result_dict.get("versions", {}).get(task_name, "1")
+                    n_shot = str(result_dict.get("n-shot", {}).get(task_name, "0"))
+                    higher_is_better = result_dict.get("higher_is_better", {}).get(task_name, {})
+                    
+                    # Handle alias
+                    display_name = task_results.get("alias", task_name)
+                    
+                    # Sort metrics for consistent display
+                    metric_items = sorted(task_results.items())
+                    
+                    first_row = True
+                    for metric_key, value in metric_items:
+                        if metric_key == "alias":
+                            continue
+                            
+                        # Parse metric name and filter
+                        if "," in metric_key:
+                            metric, filter_name = metric_key.split(",", 1)
+                        else:
+                            metric, filter_name = metric_key, ""
+                            
+                        # Skip stderr entries (they'll be handled with their main metric)
+                        if metric.endswith("_stderr"):
+                            continue
+                            
+                        # Get stderr if available
+                        stderr_key = f"{metric}_stderr,{filter_name}" if filter_name else f"{metric}_stderr"
+                        stderr = task_results.get(stderr_key, "")
+                        stderr_str = f"±{stderr:.4f}" if isinstance(stderr, (int, float)) else ""
+                        
+                        # Format value
+                        value_str = f"{value:.4f}" if isinstance(value, (int, float)) else str(value)
+                        
+                        # Higher is better symbol
+                        hib_symbol = "↑" if higher_is_better.get(metric, None) else ""
+                        
+                        # Print row
+                        name_col = display_name if first_row else ""
+                        version_col = str(version) if first_row else ""
+                        print(f"{name_col:<25}|{version_col:<7}|{filter_name:<15}|{n_shot:<6}|{metric:<11}|{hib_symbol:<3}|{value_str:<6}|{'':<3}|{stderr_str:<6}|")
+                        first_row = False
+            
+            print_results_table(results)
+            
+            # Additional debug info
+            print(f"Model: {args.model}")
+            print(f"Max length: {max_length}")
+            print(f"Quantize: {args.quantize}")
+            print(f"Tag: {args.tag}")
+            for task in args.task:
+                print(f"Task: {task}")
+        else:
+            print("No results returned from evaluation")
 
         if args.output:
             output_filename = f"{args.output}_{args.tag}.json" if args.tag else args.output
