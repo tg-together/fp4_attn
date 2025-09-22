@@ -211,11 +211,13 @@ def main():
         llama_fp4_attention_forward.quantize_enabled = args.quantize.upper() if isinstance(args.quantize, str) else args.quantize
 
     # if args.quantize or args.visualize:
-    patch_attention()   ## Enable FP4 attention
-
+    try:
+        patch_attention()   ## Enable FP4 attention
+    except:
+        print ("Warningm can't replace attention")
     # start_record_memory_history()
 
-    for max_length in [2048]:
+    for max_length in [32768+1]:
         with torch.no_grad():
             results = calculate_perplexity(
                 model=args.model,
@@ -261,7 +263,7 @@ def main():
         if args.output:
             output_filename = f"{args.output}_{args.tag}.json" if args.tag else args.output
             with open(output_filename, 'w') as f:
-                json.dump(results, f, indent=2)
+                json.dump(results, f, indent=2, default=str)
     
     if args.visualize:
         # Create a combined tag that includes both the original tag and task names
