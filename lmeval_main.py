@@ -215,7 +215,7 @@ def main():
 
     # start_record_memory_history()
 
-    for max_length in [2048]:
+    for max_length in [32000]:
         with torch.no_grad():
             results = calculate_perplexity(
                 model=args.model,
@@ -261,7 +261,7 @@ def main():
         if args.output:
             output_filename = f"{args.output}_{args.tag}.json" if args.tag else args.output
             with open(output_filename, 'w') as f:
-                json.dump(results, f, indent=2)
+                json.dump(results, f, indent=2, default=str)
     
     if args.visualize:
         # Create a combined tag that includes both the original tag and task names
