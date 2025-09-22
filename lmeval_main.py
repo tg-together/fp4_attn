@@ -211,11 +211,13 @@ def main():
         llama_fp4_attention_forward.quantize_enabled = args.quantize.upper() if isinstance(args.quantize, str) else args.quantize
 
     # if args.quantize or args.visualize:
-    patch_attention()   ## Enable FP4 attention
-
+    try:
+        patch_attention()   ## Enable FP4 attention
+    except:
+        print ("Warningm can't replace attention")
     # start_record_memory_history()
 
-    for max_length in [32000]:
+    for max_length in [32768+1]:
         with torch.no_grad():
             results = calculate_perplexity(
                 model=args.model,
