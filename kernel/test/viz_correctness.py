@@ -95,10 +95,16 @@ def assert_correctness(
         print(f"  Percentage: {large_diff_percentage:.2f}%")
         
         # Generate HTML visualization if there are large diffs
-        _generate_html_visualization(name, out, ref, abs_diff, rel_diff, combined_large_diffs, atol, rtol, results_dir)
+        # _generate_html_visualization(name, out, ref, abs_diff, rel_diff, combined_large_diffs, atol, rtol, results_dir)
     
     if assert_close:
-        assert torch.allclose(out, ref, atol=atol, rtol=rtol)
+        try:
+            assert torch.allclose(out, ref, atol=atol, rtol=rtol)
+        except Exception as e:
+            _generate_html_visualization(name, out, ref, abs_diff, rel_diff, combined_large_diffs, atol, rtol, results_dir)
+            print(f"🚨 Assertion failed in {name}:")
+            print(f"  {e}")
+            assert False, f"Assertion failed in {name}!"
 
 
 def _generate_html_visualization(name, out, ref, abs_diff, rel_diff, large_diffs, atol, rtol, results_dir=None):

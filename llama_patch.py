@@ -104,23 +104,26 @@ def quantize_q(module, q_orig, dual=True):
     q_=q_.reshape(B * T, H_q, D)
 
     if dual:
-        Qq_hi, Qq_lo, Qq_hi_int8, Qq_lo_int8, Qs_hi, Qs_lo = module.fp4_quantizer.dual_nvfp4(q_, search=False)
+        Qq_hi, Qq_lo, Qq_hi_int8, Qq_lo_int8, Qs_hi, Qs_lo, Qs_hi_fp8, Qs_lo_fp8 = module.fp4_quantizer.dual_nvfp4(q_, search=False)
     else:
-        Qq_hi, Qq_hi_int8, Qs_hi = module.fp4_quantizer.single_nvfp4(q_, search=False)
+        Qq_hi, Qq_hi_int8, Qs_hi, Qs_hi_fp8 = module.fp4_quantizer.single_nvfp4(q_, search=False)
         Qq_lo = torch.zeros_like(Qq_hi)
         Qs_lo = torch.zeros_like(Qs_hi)
+        Qs_lo_fp8 = torch.zeros_like(Qs_hi_fp8)
 
     Qq_hi=Qq_hi.reshape(B, T, H_q, D).permute(0, 2, 1, 3)
     Qq_hi_int8=Qq_hi_int8.reshape(B, T, H_q, D // 2).permute(0, 2, 1, 3)
     Qq_lo = Qq_lo.reshape(B, T, H_q, D).permute(0, 2, 1, 3)
     Qq_lo_int8=Qq_lo_int8.reshape(B, T, H_q, D // 2).permute(0, 2, 1, 3)
 
+    Qs_hi_fp8 = Qs_hi_fp8.reshape(B, T, H_q, D // 16).permute(0, 2, 1, 3)
+    Qs_lo_fp8 = Qs_lo_fp8.reshape(B, T, H_q, D // 16).permute(0, 2, 1, 3)
     if module.fp4_quantizer.global_sf_max is not None:
         Qs_hi = Qs_hi.reshape(B, T, H_q, 1).permute(0, 2, 1, 3)
         Qs_lo = Qs_lo.reshape(B, T, H_q, 1).permute(0, 2, 1, 3)
 
 
-    return Qq_hi, Qq_lo, Qq_hi_int8, Qq_lo_int8, Qs_hi, Qs_lo
+    return Qq_hi, Qq_lo, Qq_hi_int8, Qq_lo_int8, Qs_hi, Qs_lo, Qs_hi_fp8, Qs_lo_fp8
 
 
 def quantize_k(module, k_orig, zero_point=None):
@@ -139,17 +142,18 @@ def quantize_k(module, k_orig, zero_point=None):
 
     k_=k_.reshape(B * T, H_k, D)
 
-    Kq_hi, Kq_hi_int8, Ks_hi = module.fp4_quantizer.single_nvfp4(k_, search=True)
+    Kq_hi, Kq_hi_int8, Ks_hi, Ks_hi_fp8 = module.fp4_quantizer.single_nvfp4(k_, search=True)
 
 
     Kq_hi=Kq_hi.reshape(B, T, H_k, D).permute(0, 2, 1, 3)
     Kq_hi_int8=Kq_hi_int8.reshape(B, T, H_k, D // 2).permute(0, 2, 1, 3)
 
+    Ks_hi_fp8 = Ks_hi_fp8.reshape(B, T, H_k, D // 16).permute(0, 2, 1, 3)
     if module.fp4_quantizer.global_sf_max is not None:
         Ks_hi = Ks_hi.reshape(B, T, H_k, 1).permute(0, 2, 1, 3)
 
 
-    return Kq_hi, Kq_hi_int8, Ks_hi, mean
+    return Kq_hi, Kq_hi_int8, Ks_hi, Ks_hi_fp8, mean
 
 
 def quantize_v(module, v_orig):
@@ -165,17 +169,18 @@ def quantize_v(module, v_orig):
     v_=v_.reshape(B * T, H_v, D)
 
 
-    Vq_hi, Vq_hi_int8, Vs_hi = module.fp4_quantizer.single_nvfp4(v_, search=True, transpose=True)
+    Vq_hi, Vq_hi_int8, Vs_hi, Vs_hi_fp8 = module.fp4_quantizer.single_nvfp4(v_, search=True, transpose=True)
 
 
     Vq_hi=Vq_hi.reshape(B, T, H_v, D).permute(0, 2, 1, 3)
     Vq_hi_int8=Vq_hi_int8.reshape(B, T, H_v, D // 2).permute(0, 2, 1, 3)
  
+    Vs_hi_fp8 = Vs_hi_fp8.reshape(B, T, H_v, D // 16).permute(0, 2, 1, 3)
     if module.fp4_quantizer.global_sf_max is not None:
         Vs_hi = Vs_hi.reshape(B, T, H_v, 1).permute(0, 2, 1, 3)
 
  
-    return Vq_hi, Vq_hi_int8, Vs_hi
+    return Vq_hi, Vq_hi_int8, Vs_hi, Vs_hi_fp8
 
 def quantize_p(module, attn_weights, dual=True):
 
@@ -184,23 +189,26 @@ def quantize_p(module, attn_weights, dual=True):
     attn_weights_2d = attn_weights.reshape(-1, attn_weights.shape[-1])
 
     if dual:
-        Aq_hi, Aq_lo, Aq_hi_int8, Aq_lo_int8, As_hi, As_lo = module.fp4_quantizer.dual_nvfp4(attn_weights_2d, search=False)
+        Aq_hi, Aq_lo, Aq_hi_int8, Aq_lo_int8, As_hi, As_lo, As_hi_fp8, As_lo_fp8 = module.fp4_quantizer.dual_nvfp4(attn_weights_2d, search=False)
 
         Aq_hi = Aq_hi.reshape(original_shape)
         Aq_lo = Aq_lo.reshape(original_shape)
         As_hi = As_hi.reshape(*original_shape[:-1],1)
         As_lo = As_lo.reshape(*original_shape[:-1],1)
+        As_hi_fp8 = As_hi_fp8.reshape(*original_shape[:-1],original_shape[-1] // 16)
+        As_lo_fp8 = As_lo_fp8.reshape(*original_shape[:-1],original_shape[-1] // 16)
 
 
     else:
 
-        Aq_hi, Aq_hi_int8, As_hi = module.fp4_quantizer.single_nvfp4(attn_weights_2d, search=False)
+        Aq_hi, Aq_hi_int8, As_hi, As_hi_fp8 = module.fp4_quantizer.single_nvfp4(attn_weights_2d, search=False)
         Aq_hi = Aq_hi.reshape(original_shape)
         As_hi = As_hi.reshape(*original_shape[:-1],1)
         Aq_lo = torch.zeros_like(Aq_hi)
         As_lo = torch.zeros_like(As_hi)
+        As_lo_fp8 = torch.zeros_like(As_hi_fp8)
 
-    return Aq_hi, Aq_lo, Aq_hi_int8, Aq_lo_int8, As_hi, As_lo
+    return Aq_hi, Aq_lo, Aq_hi_int8, Aq_lo_int8, As_hi, As_lo, As_hi_fp8, As_lo_fp8
 
 
 
@@ -263,7 +271,7 @@ def eager_attention_forward(
 
     if hasattr(module, 'quantize_p') and module.quantize_p:
 
-        Aq_hi, Aq_lo, Aq_hi_int8, Aq_lo_int8, As_hi, As_lo = quantize_p(module, attn_weights, module.use_dual_quant_attn)
+        Aq_hi, Aq_lo, Aq_hi_int8, Aq_lo_int8, As_hi, As_lo, As_hi_fp8, As_lo_fp8 = quantize_p(module, attn_weights, module.use_dual_quant_attn)
         attn_weights = (Aq_hi*As_hi+Aq_lo*As_lo)
 
 
@@ -297,7 +305,8 @@ def llama_fp4_attention_forward(
         self.fp_mask = os.getenv('FP_MASK', 'true').lower() == 'true'
         self.ip = os.getenv('IP', 'true').lower() == 'true'
 
-        self.fp4_quantizer = FP4Quantizer(global_sf_max=1536, device=self.q_proj.weight.device)
+        # self.fp4_quantizer = FP4Quantizer(global_sf_max=1536, device=self.q_proj.weight.device)
+        self.fp4_quantizer = FP4Quantizer(global_sf_max=None, device=self.q_proj.weight.device)
         
         self.qk_mean_averages_before_rope=torch.load("qk_mean_averages_before_rope.pt")
         self.q_hessian=torch.load("qk_hessians.pt")
@@ -359,7 +368,7 @@ def llama_fp4_attention_forward(
             hessian=self.q_hessian[f'layer_{self.layer_idx}']['q_mean_avg'].to(query_states.device)
             query_states, key_states, key_mean= incoherence_processing(query_states.to(torch.float64), key_states.to(torch.float64), hessian.clone().to(torch.float64), key_mean.to(torch.float64))
 
-        Qq_hi, Qq_lo, Qq_hi_int8, Qq_lo_int8, Qs_hi, Qs_lo= quantize_q(self, query_states, dual=self.use_dual_quant_q)
+        Qq_hi, Qq_lo, Qq_hi_int8, Qq_lo_int8, Qs_hi, Qs_lo, Qs_hi_fp8, Qs_lo_fp8 = quantize_q(self, query_states, dual=self.use_dual_quant_q)
         if hasattr(self, 'qkfp4_kernel'):
             # test single q for now
             query_states = Qq_hi*Qs_hi
@@ -367,7 +376,7 @@ def llama_fp4_attention_forward(
             query_states = Qq_hi*Qs_hi + Qq_lo*Qs_lo 
 
     
-        Kq, Kq_int8, Ks, K_mean = quantize_k(self, key_states, zero_point=self.zero_point_KV)
+        Kq, Kq_int8, Ks, Ks_fp8, K_mean = quantize_k(self, key_states, zero_point=self.zero_point_KV)
         if hasattr(self, 'qkfp4_kernel'):
             # test no mean for now
             key_states = Kq*Ks
@@ -377,7 +386,7 @@ def llama_fp4_attention_forward(
             key_states=key_states+(key_mean)
 
 
-        Vq, Vq_int8, Vs = quantize_v(self, value_states)
+        Vq, Vq_int8, Vs, Vs_fp8 = quantize_v(self, value_states)
         value_states = Vq*Vs 
         
     
@@ -404,9 +413,24 @@ def llama_fp4_attention_forward(
         value_states = torch.randn_like(value_states.to(torch.bfloat16))
 
     if self.config._attn_implementation == "tkfp4":
-        query_states = Qq_hi_int8
-        key_states = Kq_int8
-        value_states = Vq_int8
+        # query_states = Qq_hi_int8
+        # key_states = Kq_int8
+        # value_states = Vq_int8
+
+        if hasattr(self, 'quantize'):
+            Qs_hi = Qs_hi_fp8
+            Ks = Ks_fp8
+            Vs = Vs_fp8
+        else:
+            b, h, n, d = query_states.shape
+            Qs_hi = torch.ones(b, h, n, d // 16, dtype=torch.float8_e4m3fn, device=query_states.device)
+            Ks = torch.ones(b, h, n, d // 16, dtype=torch.float8_e4m3fn, device=query_states.device)
+            Vs = torch.ones(b, h, n, d // 16, dtype=torch.float8_e4m3fn, device=query_states.device)
+    elif self.config._attn_implementation == "eager":
+        if not hasattr(self, 'quantize'):
+            Qs_hi = None
+            Ks = None
+            Vs = None
 
     attn_output, attn_weights = attention_interface(
         self,
