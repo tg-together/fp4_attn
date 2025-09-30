@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import os
+import sys
 from lm_eval import simple_evaluate
 from transformers import AutoModelForCausalLM, AutoConfig
 import transformers
@@ -12,7 +14,36 @@ import socket
 from datetime import datetime, timedelta
 import logging
 import numpy as np
-import os
+
+
+def get_kvquant_model(model_name):
+    """Get KVQuant quantized model with default settings from run.sh"""
+    # Add KVQuant path to sys.path
+    kvquant_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'KVQuant', 'quant')
+    sys.path.insert(0, kvquant_path)
+    
+    from llama_simquant import run_kvquant, create_parser
+    
+    # Default KVQuant arguments from run.sh
+    kvquant_args = [
+        '--abits', '4',
+        '--nuq',
+        '--first_few_fp16', '1',
+        '--fisher', '../gradients/output/',
+        '--quantizer-path', 'quantizers.pickle'
+    ]
+    
+    # Parse KVQuant arguments
+    parser = create_parser()
+    args = parser.parse_args([model_name] + kvquant_args)
+    
+    # Get quantized model
+    model = run_kvquant(args, return_model=True)
+    
+    # Remove from path
+    sys.path.remove(kvquant_path)
+    
+    return model
 
 
 def save_qk_hessians(model_name, dataset, tag=""):
@@ -114,6 +145,7 @@ def parse_arguments():
     parser.add_argument("--tag", default="", help="Tag to append to filenames")
     parser.add_argument("--task", nargs='+', default=["pile_10k", "gsm8k"], help="Task(s) to evaluate (can specify multiple)")
     parser.add_argument("--hessian_dataset", type=str, default="wikitext2", help="Dataset name to load hessians from (e.g., 'pile_10k')")
+    parser.add_argument("--kvquant", action="store_true", help="Use KVQuant quantization")
     
     # Parse known args to capture additional eval arguments
     args, unknown_args = parser.parse_known_args()
@@ -223,13 +255,40 @@ def main():
     if args.quantize:
         llama_fp4_attention_forward.quantize_enabled = args.quantize.upper() if isinstance(args.quantize, str) else args.quantize
 
-    # if args.quantize or args.visualize:
-    try:
-        patch_attention()   ## Enable FP4 attention
-    except:
-        print ("Warningm can't replace attention")
-    # start_record_memory_history()
-
+    # Apply FP4 patches if quantize is enabled (and not using kvquant)
+    if args.quantize and not args.kvquant:
+        try:
+            patch_attention()   ## Enable FP4 attention
+        except:
+            print("Warning: can't replace attention")
+    
+    # Handle KVQuant model saving/loading
+    if args.kvquant:
+        # Create a permanent directory for KVQuant models
+        model_short = args.model.split('/')[-1] if '/' in args.model else args.model
+        model_dir = f"kvquant_models/{model_short}_kvquant"
+        
+        # Check if model already exists
+        if os.path.exists(model_dir) and os.path.exists(os.path.join(model_dir, "config.json")):
+            print(f"Found existing KVQuant model at {model_dir}, loading from saved path")
+            args.model = model_dir
+        else:
+            print(f"Loading and quantizing model with KVQuant default settings")
+            model = get_kvquant_model(args.model)
+            
+            # Save the quantized model permanently
+            os.makedirs(model_dir, exist_ok=True)
+            model.save_pretrained(model_dir)
+            print(f"KVQuant model saved to: {model_dir}")
+            
+            # Update args.model to point to saved model
+            args.model = model_dir
+            
+            # Delete the model object to free memory before reloading
+            del model
+            torch.cuda.empty_cache()
+    
+    # Common evaluation path for both FP4 and KVQuant
     for max_length in [32768+1]:
         with torch.no_grad():
             results = calculate_perplexity(
@@ -239,7 +298,7 @@ def main():
                 num_samples=args.num_samples,
                 max_length=max_length,
                 **eval_kwargs
-                )
+            )
         
         if args.record_hessian:
             task_str = "_".join(args.task) if len(args.task) > 1 else args.task[0]

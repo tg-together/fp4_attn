@@ -2,6 +2,7 @@ import argparse
 import json
 import math
 import os
+import sys
 import random
 from transformers import AutoModelForCausalLM
 import datasets
@@ -93,6 +94,37 @@ parser.add_argument("--record_hessian", action="store_true", help="Record Q/K He
 parser.add_argument("--record_means", action="store_true", help="Record K means")
 parser.add_argument("--tag", default="", help="Tag to append to filenames")
 parser.add_argument("--hessian_dataset", type=str, default="wikitext2", help="Dataset name to load hessians from (e.g., 'wikitext2')")
+parser.add_argument("--kvquant", action="store_true", help="Use KVQuant quantization")
+
+
+def get_kvquant_model(model_name):
+    """Get KVQuant quantized model with default settings from run.sh"""
+    # Add KVQuant path to sys.path
+    kvquant_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'KVQuant', 'quant')
+    sys.path.insert(0, kvquant_path)
+    
+    from llama_simquant import run_kvquant, create_parser
+    
+    # Default KVQuant arguments from run.sh (without seqlen - matching lmeval_main.py)
+    kvquant_args = [
+        '--abits', '4',
+        '--nuq',
+        '--first_few_fp16', '1',
+        '--fisher', '../gradients/output/',
+        '--quantizer-path', 'quantizers.pickle'
+    ]
+    
+    # Parse KVQuant arguments
+    parser = create_parser()
+    args = parser.parse_args([model_name] + kvquant_args)
+    
+    # Get quantized model
+    model = run_kvquant(args, return_model=True)
+    
+    # Remove from path
+    sys.path.remove(kvquant_path)
+    
+    return model
 
 
 def patch_attention():
@@ -137,8 +169,36 @@ def main(args):
         args.quantize = False
         llama_fp4_attention_forward.store_means = True
     
-    patch_attention()
-    llama_fp4_attention_forward.quantize_enabled = args.quantize
+    # Handle KVQuant model saving/loading
+    if args.kvquant:
+        # Create a permanent directory for KVQuant models
+        model_dir = f"kvquant_models/{model_short}_kvquant"
+        
+        # Check if model already exists
+        if os.path.exists(model_dir) and os.path.exists(os.path.join(model_dir, "config.json")):
+            print(f"Found existing KVQuant model at {model_dir}, loading from saved path")
+            model_str = model_dir
+        else:
+            print(f"Loading and quantizing model with KVQuant default settings")
+            model = get_kvquant_model(model_str)
+            
+            # Save the quantized model permanently
+            os.makedirs(model_dir, exist_ok=True)
+            model.save_pretrained(model_dir)
+            print(f"KVQuant model saved to: {model_dir}")
+            
+            # Update model_str to point to saved model
+            model_str = model_dir
+            
+            # Delete the model object to free memory before reloading
+            del model
+            torch.cuda.empty_cache()
+    else:
+        # Apply FP4 patches if not using KVQuant
+        patch_attention()
+        llama_fp4_attention_forward.quantize_enabled = args.quantize
+    
+    # Common model loading path for both FP4 and KVQuant
     model = AutoModelForCausalLM.from_pretrained(
         model_str, 
         trust_remote_code=True, 
