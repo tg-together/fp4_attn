@@ -9,6 +9,7 @@ import glog
 import torch
 from tqdm import tqdm
 from llama_patch import llama_fp4_attention_forward
+from qwen3_patch import qwen3_fp4_attention_forward
 import data_utils
 import transformers
 from transformers import AutoModelForCausalLM
@@ -95,13 +96,25 @@ parser.add_argument("--hessian_dataset", type=str, default="wikitext2", help="Da
 
 
 def patch_attention():
-    transformers.models.llama.modeling_llama.LlamaAttention.forward = llama_fp4_attention_forward
-    original_init = transformers.models.llama.modeling_llama.LlamaForCausalLM.__init__
 
-    def patched_init(self, config):
-        original_init(self, config)             
+
+
+    transformers.models.llama.modeling_llama.LlamaAttention.forward = llama_fp4_attention_forward
+    transformers.models.qwen3.modeling_qwen3.Qwen3Attention.forward = qwen3_fp4_attention_forward
+
+    original_init_llama = transformers.models.llama.modeling_llama.LlamaForCausalLM.__init__
+    original_init_qwen3 = transformers.models.qwen3.modeling_qwen3.Qwen3ForCausalLM.__init__
+
+    def patched_init_llama(self, config):
+        original_init_llama(self, config)             
         self.config._attn_implementation = "eager"
-    transformers.models.llama.modeling_llama.LlamaForCausalLM.__init__ = patched_init
+
+    def patched_init_qwen3(self, config):
+        original_init_qwen3(self, config)             
+        self.config._attn_implementation = "eager"
+
+    transformers.models.llama.modeling_llama.LlamaForCausalLM.__init__ = patched_init_llama
+    transformers.models.qwen3.modeling_qwen3.Qwen3ForCausalLM.__init__ = patched_init_qwen3
 
 
 def main(args):
