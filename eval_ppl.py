@@ -171,40 +171,23 @@ def main(args):
     
     # Handle KVQuant model saving/loading
     if args.kvquant:
-        # Create a permanent directory for KVQuant models
-        model_dir = f"kvquant_models/{model_short}_kvquant"
-        
-        # Check if model already exists
-        if os.path.exists(model_dir) and os.path.exists(os.path.join(model_dir, "config.json")):
-            print(f"Found existing KVQuant model at {model_dir}, loading from saved path")
-            model_str = model_dir
-        else:
-            print(f"Loading and quantizing model with KVQuant default settings")
-            model = get_kvquant_model(model_str)
-            
-            # Save the quantized model permanently
-            os.makedirs(model_dir, exist_ok=True)
-            model.save_pretrained(model_dir)
-            print(f"KVQuant model saved to: {model_dir}")
-            
-            # Update model_str to point to saved model
-            model_str = model_dir
-            
-            # Delete the model object to free memory before reloading
-            del model
-            torch.cuda.empty_cache()
+
+        model = get_kvquant_model(model_str)
+
+          
     else:
+        model = AutoModelForCausalLM.from_pretrained(
+            model_str, 
+            trust_remote_code=True, 
+            torch_dtype=torch.bfloat16,
+            device_map="auto"
+        )
         # Apply FP4 patches if not using KVQuant
         patch_attention()
         llama_fp4_attention_forward.quantize_enabled = args.quantize
     
     # Common model loading path for both FP4 and KVQuant
-    model = AutoModelForCausalLM.from_pretrained(
-        model_str, 
-        trust_remote_code=True, 
-        torch_dtype=torch.bfloat16,
-        device_map="auto"
-    )
+
 
 
     model.eval() 
