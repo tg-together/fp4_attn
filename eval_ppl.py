@@ -103,6 +103,7 @@ def get_kvquant_model(model_name):
     """Get KVQuant quantized model with default settings from run.sh"""
     # Add KVQuant path to sys.path
     kvquant_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'KVQuant', 'quant')
+    kvquant_path_root = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'KVQuant')
     sys.path.insert(0, kvquant_path)
     
     from llama_simquant import run_kvquant, create_parser
@@ -112,8 +113,8 @@ def get_kvquant_model(model_name):
         '--abits', '4',
         '--nuq',
         '--first_few_fp16', '1',
-        '--fisher', '../gradients/output/',
-        '--quantizer-path', 'quantizers.pickle'
+        '--fisher', f'{kvquant_path_root}/output/{model_name.split("/")[-1]}/',
+        '--quantizer-path', f'{kvquant_path_root}/output/{model_name.split("/")[-1]}/quantizers.pickle'
     ]
     
     # Parse KVQuant arguments
@@ -157,24 +158,29 @@ def main(args):
     
     # Configure llama_patch with hessian settings
     import llama_patch
+    import qwen3_patch
     
 
     model_short = model_str.split('/')[-1] if '/' in model_str else model_str
     llama_patch.hessian_folder = f"dumps/{model_short}_{args.hessian_dataset}"
+    qwen3_patch.hessian_folder = f"dumps/{model_short}_{args.hessian_dataset}"
 
     
     if args.record_hessian:
         args.quantize = False
+        args.kvquant = False
         llama_fp4_attention_forward.store_hessian = True
+        qwen3_fp4_attention_forward.store_hessian = True
 
     
     if args.record_means:
         args.quantize = False
         llama_fp4_attention_forward.store_means = True
-    
+        qwen3_fp4_attention_forward.store_means = True
+
     # Handle KVQuant model saving/loading
     if args.kvquant:
-
+        args.quantize = False
         model = get_kvquant_model(model_str)
 
           
@@ -187,6 +193,7 @@ def main(args):
             device_map="auto"
         )
         llama_fp4_attention_forward.quantize_enabled = args.quantize
+        qwen3_fp4_attention_forward.quantize_enabled = args.quantize
     
     # Common model loading path for both FP4 and KVQuant
 
