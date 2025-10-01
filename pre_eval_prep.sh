@@ -11,8 +11,8 @@ mkdir -p "logs/record/"
 #FP4 Record Hessians
 
 # # # Model and dataset configuration
-# MODEL="meta-llama/Llama-3.1-8B"
-# CUDA_VISIBLE_DEVICES=0  python eval_ppl.py --model "${MODEL}" --dataset wikitext2 --record_hessian 2>&1 | tee "logs/record/${MODEL##*/}_hessian_record.txt" &
+MODEL="meta-llama/Llama-3.1-8B"
+CUDA_VISIBLE_DEVICES=0  python eval_ppl.py --model "${MODEL}" --dataset wikitext2 --record_hessian 2>&1 | tee "logs/record/${MODEL##*/}_hessian_record.txt" &
 
 MODEL="meta-llama/Llama-3.1-70B"
 CUDA_VISIBLE_DEVICES=1  python eval_ppl.py --model "${MODEL}" --dataset wikitext2 --record_hessian --batch_size 1 2>&1 | tee "logs/record/${MODEL##*/}_hessian_record.txt" &
