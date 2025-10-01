@@ -22,12 +22,15 @@ torch.set_grad_enabled(False)
 def save_qk_hessians(model_name, dataset, tag=""):
     """Save the running averages of Q Hessian per layer.
     Each mean has shape [1, H, 1, D] where H is the number of heads."""
-    from llama_patch import hessian_running_averages
-    
+    from llama_patch import hessian_running_averages as llama_hess
+    from qwen3_patch import hessian_running_averages as qwen_hess
+
+    hessian_running_averages = llama_hess if llama_hess['counts'] else qwen_hess
+
     if not hessian_running_averages['counts']:
         print("No Q/K Hessian averages to save")
         return
-    
+        
     # Collect the averages (already computed incrementally)
     averages = {}
     for layer_idx in sorted(hessian_running_averages['counts'].keys()):
