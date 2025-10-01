@@ -30,7 +30,8 @@ def create_dataloader(tokenenc, n_samples, seqlen, batch_size, tokenizer):
     """Add BOS token and create dataloader from tokenized data."""
     tokenenc = tokenenc[0, 1:(n_samples*seqlen)+1].view(n_samples, -1)
     sos_token = tokenizer.bos_token_id
-    tokenenc = torch.cat((torch.tensor([sos_token]*n_samples).unsqueeze(1), tokenenc), 1)
+    if sos_token is not None:
+        tokenenc = torch.cat((torch.tensor([sos_token]*n_samples).unsqueeze(1), tokenenc), 1)
     dataset = TensorDataset(tokenenc)
     return DataLoader(dataset, batch_size=batch_size, shuffle=False)
 
@@ -41,7 +42,7 @@ def get_wikitext2(nsamples, seed, seqlen, batch_size, model, split='test'):
     if split == 'train':
         # Stream train data for 1000 samples
         traindata = load_dataset('wikitext', 'wikitext-103-raw-v1', split='train', streaming=True)
-        testenc = stream_until_tokens(iter(traindata), tokenizer, seqlen * 1000)
+        testenc = stream_until_tokens(iter(traindata), tokenizer, seqlen * 500)
         n_samples = min(1000, testenc.shape[1]//seqlen)
     else:
         testdata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test')

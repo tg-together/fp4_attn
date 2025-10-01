@@ -82,9 +82,8 @@ def save_k_means(model_name, dataset, tag=""):
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--seed', default=0, type=int)
-parser.add_argument('--hf_path', default='hfized/quantized_hada_70b', type=str)
-parser.add_argument('--seqlen', default=8192, type=int)
-parser.add_argument('--batch_size', default=10, type=int)
+parser.add_argument('--seqlen', default=16384, type=int)
+parser.add_argument('--batch_size', default=4, type=int)
 parser.add_argument('--num_samples', default=50, type=int)
 parser.add_argument('--quantize', action='store_true')
 parser.add_argument('--no_use_flash_attn', action='store_true')
@@ -164,6 +163,7 @@ def main(args):
     if args.record_hessian:
         args.quantize = False
         llama_fp4_attention_forward.store_hessian = True
+
     
     if args.record_means:
         args.quantize = False
@@ -176,14 +176,13 @@ def main(args):
 
           
     else:
+        patch_attention()
         model = AutoModelForCausalLM.from_pretrained(
             model_str, 
             trust_remote_code=True, 
             torch_dtype=torch.bfloat16,
             device_map="auto"
         )
-        # Apply FP4 patches if not using KVQuant
-        patch_attention()
         llama_fp4_attention_forward.quantize_enabled = args.quantize
     
     # Common model loading path for both FP4 and KVQuant
@@ -192,6 +191,7 @@ def main(args):
 
     model.eval() 
     first_device = next(model.parameters()).device
+
     
     for dataset in datasets:
         print("Dataset: ", dataset)
@@ -208,9 +208,10 @@ def main(args):
         loss_fct = torch.nn.CrossEntropyLoss(reduction='sum')
         acc_loss = 0.0
         total_tokens = 0
-        print("Length of dataloader: ", len(dataloader))
+
         progress = tqdm(enumerate(dataloader), total=len(dataloader))
         for ii, (input,) in progress:
+
             input = input.to(first_device)  
             output = model(
                 input,
@@ -234,6 +235,11 @@ def main(args):
             progress.set_description(f"avg_loss = {acc_loss / total_tokens:.4f}")
             del output, shift_logits, shift_labels, loss
             torch.cuda.empty_cache()
+            for i in range(torch.cuda.device_count()):
+                print(f"Device {i}: {torch.cuda.get_device_name(i)}")
+                print(f"  Allocated: {torch.cuda.memory_allocated(i) / 1024**2:.2f} MB")
+                print(f"  Cached:    {torch.cuda.memory_reserved(i) / 1024**2:.2f} MB")
+        
 
 
         avg_loss = acc_loss / total_tokens
