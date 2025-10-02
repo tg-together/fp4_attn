@@ -4,7 +4,7 @@ from typing import Optional, Unpack
 import torch
 from torch import nn
 
-# import b200_attn_fp4
+import b200_attn_fp4
 
 # remove when gqa is supported
 from transformers.models.llama.modeling_llama import repeat_kv
@@ -30,7 +30,7 @@ def pack_scales_ue4m3_cuda(
     bytes_per_lane: int = 4,
 ) -> torch.Tensor:
     # Accept 4D tensor [b, h, n, d] and reshape internally
-    b, h, n, d = scales_4d.shape
+    _, _, _, d = scales_4d.shape
     assert scales_4d.is_cuda and scales_4d.ndim == 4, "Input must be 4D CUDA tensor [b, h, n, d]"
 
     PACKED_TILE_WIDTH = d * (MN_tile_height // tmem_lanes) * stages_packed
@@ -70,11 +70,7 @@ def pack_scales_ue4m3_cuda(
     # We choose the format so that each CTA loads it's own data
 
     interleaved_scales = rearrange(
-        scales_per_tile, "b h (s sp cta) t d -> b h s cta t (sp d)", cta=num_ctas, sp=stages_packed
-    )
-
-    interleaved_scales = interleaved_scales.reshape(
-        b, h, n // (stages_packed * TILE_HEIGHT_SWIZZLE_FACTOR), PACKED_TILE_WIDTH
+        scales_per_tile, "b h (s sp cta) t d -> b h (s cta t) (sp d)", cta=num_ctas, sp=stages_packed
     )
 
     return interleaved_scales
@@ -89,7 +85,6 @@ def tkfp4_attention_forward(
     key_uq: torch.Tensor,  # [b, h, n, d // 2] # unused for now
     casusal: bool,
     scaling: float,
-    dropout: float = 0.0,
     query_scales: torch.Tensor = None,  # torch.float8_e4m3fn # [b, h, n, d // 16]
     query_scales2: torch.Tensor = None,  # Single float32 value
     key_scales: torch.Tensor = None,  # torch.float8_e4m3fn # [b, h, n, d // 16]
@@ -123,23 +118,26 @@ def tkfp4_attention_forward(
     packed_query_scales = pack_scales_ue4m3_cuda(query_scales, Q_TILE_HEIGHT, Q_SCALE_STAGES_PACKED, Q_NUM_CTAS_SPLIT)
     packed_key_scales = pack_scales_ue4m3_cuda(key_scales, K_TILE_HEIGHT, K_SCALE_STAGES_PACKED, K_NUM_CTAS_SPLIT)
 
-    # only causal mask supported for now
+    _packed_query_scales = packed_query_scales.contiguous()
+    _packed_key_scales = packed_key_scales.contiguous()
+
     if casusal:
+        raise NotImplementedError("Causal mask not supported for now")
         b200_attn_fp4.fwd_attend_ker_128_causal(
             _query,
+            _packed_query_scales,
             _key,
+            _packed_key_scales,
             _value,
-            packed_query_scales,
-            packed_key_scales,
             o,
         )
     else:
         b200_attn_fp4.fwd_attend_ker_128_noncausal(
             _query,
+            _packed_query_scales,
             _key,
+            _packed_key_scales,
             _value,
-            packed_query_scales,
-            packed_key_scales,
             o,
         )
 
