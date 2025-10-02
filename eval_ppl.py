@@ -113,7 +113,6 @@ def get_kvquant_model(model_name):
         '--abits', '4',
         '--nuq',
         '--first_few_fp16', '1',
-        '--fisher', f'{kvquant_path_root}/output/{model_name.split("/")[-1]}/',
         '--quantizer-path', f'{kvquant_path_root}/output/{model_name.split("/")[-1]}/quantizers.pickle'
     ]
     
