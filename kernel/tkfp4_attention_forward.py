@@ -20,32 +20,39 @@ except ImportError:
         pass
 
 
+TESTING = True
+
+
 @torch.no_grad()
 def pack_scales_ue4m3_cuda(
     scales_4d: torch.Tensor,
     MN_tile_height: int = 128,
-    stages_packed: int = 2,
-    num_ctas: int = 2,
-    tmem_lanes: int = 32,
-    bytes_per_lane: int = 4,
+    stages_packed: int = 2,  # The number of stages to pack into a single tile
+    tiles_swizzling_factor: int = 2,  # How we should swizzle each packed tile along the sequence dimension
+    tmem_lanes: int = 32,  # The number of rows to store data
+    bytes_per_lane: int = 4,  # The number of bytes per column in a TMEM lane
 ) -> torch.Tensor:
     # Accept 4D tensor [b, h, n, d] and reshape internally
     _, _, _, d = scales_4d.shape
     assert scales_4d.is_cuda and scales_4d.ndim == 4, "Input must be 4D CUDA tensor [b, h, n, d]"
 
     PACKED_TILE_WIDTH = d * (MN_tile_height // tmem_lanes) * stages_packed
-    # assert PACKED_TILE_WIDTH % 32 == 0, "PACKED_TILE_WIDTH must be a multiple of 32 for ThunderKittens"
+    if not TESTING:
+        assert PACKED_TILE_WIDTH % 32 == 0, "PACKED_TILE_WIDTH must be a multiple of 32 for ThunderKittens"
 
-    TILE_WIDTH_SWIZZLE_FACTOR = d // bytes_per_lane
-    TILE_HEIGHT_SWIZZLE_FACTOR = MN_tile_height // tmem_lanes
+    INTRA_TILE_WIDTH_SWIZZLE_FACTOR = d // bytes_per_lane
+    INTRA_TILE_HEIGHT_SWIZZLE_FACTOR = MN_tile_height // tmem_lanes
 
-    assert TILE_WIDTH_SWIZZLE_FACTOR * bytes_per_lane == d, "TILE_WIDTH_SWIZZLE_FACTOR * bytes_per_lane must equal d"
     assert (
-        TILE_HEIGHT_SWIZZLE_FACTOR * tmem_lanes == MN_tile_height
-    ), "TILE_HEIGHT_SWIZZLE_FACTOR * tmem_lanes must equal MN_tile_height"
+        INTRA_TILE_WIDTH_SWIZZLE_FACTOR * bytes_per_lane == d
+    ), "INTRA_TILE_WIDTH_SWIZZLE_FACTOR * bytes_per_lane must equal d"
+    assert (
+        INTRA_TILE_HEIGHT_SWIZZLE_FACTOR * tmem_lanes == MN_tile_height
+    ), "INTRA_TILE_HEIGHT_SWIZZLE_FACTOR * tmem_lanes must equal MN_tile_height"
 
-    if TILE_WIDTH_SWIZZLE_FACTOR > 1:
-        raise NotImplementedError("SWIZZLE_WIDTH > 1 is not supported for now")
+    if INTRA_TILE_WIDTH_SWIZZLE_FACTOR > 1:
+        # Tensorcores only support K=64 for MMA's with block size = 16, so it doesn't matter in our case.
+        raise NotImplementedError("INTRA_TILE_WIDTH_SWIZZLE_FACTOR > 1 is not supported for now")
     else:
         # Create each MN_tiles scale data formated so that we follow the correct memory swizzling rules for scales in tmem
         # We swizzle following: https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-mma-scale-factor-a-layout-4x
@@ -53,24 +60,25 @@ def pack_scales_ue4m3_cuda(
         scales_per_tile = rearrange(
             scales_4d,
             "b h (s r tmem_lanes) d -> b h s tmem_lanes (r d)",
-            r=TILE_HEIGHT_SWIZZLE_FACTOR,
+            r=INTRA_TILE_HEIGHT_SWIZZLE_FACTOR,
             tmem_lanes=tmem_lanes,
         )
 
     # We then interleave the scales for each TILE of TMEM_LANES x d for the number of stages packed
-    # The interleaving factor is determined by the number of CTA's participating in the kernel
+    # The interleaving factor is determined by the swizzling factor
 
-    # For example given 2 CTA's and 4 stages packed, we would have:
-    # [0, 2, 4, 6] <- CTA 0
-    # [1, 3, 5, 7] <- CTA 1
-    # [8, 10, 12, 14] <- CTA 0
-    # [9, 11, 13, 15] <- CTA 1
+    # For example given 2 SWIZZLING_FACTOR and 4 stages packed, we would have:
+    # [0, 2, 4, 6] <- BLOCK 0
+    # [1, 3, 5, 7] <- BLOCK 1
+    # [8, 10, 12, 14] <- BLOCK 0
+    # [9, 11, 13, 15] <- BLOCK 1
     # ...
     # Where each index is a group of 32 x ((MN_tile_height // TMEM_LANES) * d) scales
-    # We choose the format so that each CTA loads it's own data
+    # We choose the format so that each CTA load it's own data (This is important for Q) as each CTA load different blocks of q
+    # and thus we need to swizzle scales in order to minimize the number of memory accesses.
 
     interleaved_scales = rearrange(
-        scales_per_tile, "b h (s sp cta) t d -> b h (s cta t) (sp d)", cta=num_ctas, sp=stages_packed
+        scales_per_tile, "b h (s sp sf) t d -> b h (s sf t) (sp d)", sf=tiles_swizzling_factor, sp=stages_packed
     )
 
     return interleaved_scales
