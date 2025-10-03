@@ -8,6 +8,7 @@ from transformers import AutoModelForCausalLM, AutoConfig
 import transformers
 import torch
 import llama_patch
+import qwen3_patch
 from llama_patch import llama_fp4_attention_forward
 from qwen3_patch import qwen3_fp4_attention_forward
 import socket
@@ -20,17 +21,17 @@ def get_kvquant_model(model_name):
     """Get KVQuant quantized model with default settings from run.sh"""
     # Add KVQuant path to sys.path
     kvquant_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'KVQuant', 'quant')
+    kvquant_path_root = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'KVQuant')
     sys.path.insert(0, kvquant_path)
     
     from llama_simquant import run_kvquant, create_parser
     
-    # Default KVQuant arguments from run.sh
+    # Default KVQuant arguments from run.sh (without seqlen - matching lmeval_main.py)
     kvquant_args = [
         '--abits', '4',
         '--nuq',
         '--first_few_fp16', '1',
-        '--fisher', '../gradients/output/',
-        '--quantizer-path', 'quantizers.pickle'
+        '--quantizer-path', f'{kvquant_path_root}/output/{model_name.split("/")[-1]}/quantizers.pickle'
     ]
     
     # Parse KVQuant arguments
@@ -46,67 +47,6 @@ def get_kvquant_model(model_name):
     return model
 
 
-def save_qk_hessians(model_name, dataset, tag=""):
-    """Save the running averages of Q Hessian per layer.
-    Each mean has shape [1, H, 1, D] where H is the number of heads."""
-    from llama_patch import hessian_running_averages
-    
-    if not hessian_running_averages['counts']:
-        print("No Q/K Hessian averages to save")
-        return
-    
-    # Collect the averages (already computed incrementally)
-    averages = {}
-    for layer_idx in sorted(hessian_running_averages['counts'].keys()):
-        count = hessian_running_averages['counts'][layer_idx]
-        if count > 0:
-            averages[f'layer_{layer_idx}'] = {
-                'q_hessian': hessian_running_averages['q_means'][layer_idx],  # Shape: [1, H_q, 1, D]
-                'k_hessian': hessian_running_averages['k_means'][layer_idx],  # Shape: [1, H_k, 1, D]
-            }
-    
-    # Create folder structure
-    model_short = model_name.split('/')[-1] if '/' in model_name else model_name
-    folder_name = f"dumps/{model_short}_{dataset}"
-    os.makedirs(folder_name, exist_ok=True)
-    
-    # Save to file using torch.save
-    filename = f"dumps/{folder_name}/qk_hessians_{tag}.pt" if tag else f"dumps/{folder_name}/qk_hessians.pt"
-    torch.save(averages, filename)
-    
-    print(f"Saved Q/K Hessian to {filename}")
-
-
-def save_k_means(model_name, dataset, tag=""):
-    """Save the running averages of K means per layer.
-    Each mean has shape [1, H_k, 1, D] where H_k is the number of KV heads."""
-    from llama_patch import means_running_averages
-    
-    if not means_running_averages['counts']:
-        print("No K means to save")
-        return
-    
-    # Collect the averages (already computed incrementally)
-    averages = {}
-    for layer_idx in sorted(means_running_averages['counts'].keys()):
-        count = means_running_averages['counts'][layer_idx]
-        if count > 0:
-            averages[f'layer_{layer_idx}'] = {
-                'k_mean_avg': means_running_averages['k_means'][layer_idx],  # Shape: [1, H_k, 1, D]
-            }
-    
-    # Create folder structure
-    model_short = model_name.split('/')[-1] if '/' in model_name else model_name
-    folder_name = f"dumps/{model_short}_{dataset}"
-    os.makedirs(folder_name, exist_ok=True)
-    
-    # Save to file using torch.save
-    filename = f"dumps/{folder_name}/k_mean_averages_before_rope_{tag}.pt" if tag else f"dumps/{folder_name}/k_mean_averages_before_rope.pt"
-    torch.save(averages, filename)
-    
-    print(f"Saved K means to {filename}")
-
-
 def calculate_perplexity(model, tasks, num_samples=None, device="auto", max_length=2048, **eval_kwargs):
     """Calculate perplexity using lm_eval."""
     
@@ -115,7 +55,6 @@ def calculate_perplexity(model, tasks, num_samples=None, device="auto", max_leng
         "model": "hf",
         "model_args": f"pretrained={model},max_length={max_length},trust_remote_code=True",
         "tasks": tasks,
-        "num_fewshot": 0,
         "batch_size": 20,
         "device": device,
         "confirm_run_unsafe_code":True
@@ -219,7 +158,8 @@ def patch_attention():
 
 def main():
     args, eval_kwargs = parse_arguments()
-
+    model_str = args.model
+    
     print("=" * 50)
     print("RUNNING WITH ARGUMENTS:")
     print("=" * 50)
@@ -232,67 +172,37 @@ def main():
     print("=" * 50)
 
     # Set quantization flag for llama_patch
-    llama_patch.quantize_enabled = args.quantize.upper() if isinstance(args.quantize, str) else args.quantize
     llama_patch.visualize = args.visualize
+    qwen3_patch.visualize = args.visualize
 
     # Set hessian dataset path for loading
 
     model_short = args.model.split('/')[-1] if '/' in args.model else args.model
     llama_patch.hessian_folder = f"dumps/{model_short}_{args.hessian_dataset}"
+    qwen3_patch.hessian_folder = f"dumps/{model_short}_{args.hessian_dataset}"
 
-
-    if args.record_hessian:
-        args.quantize = False
-        llama_fp4_attention_forward.store_hessian = True
-
-    if args.record_means:
-        args.quantize = False
-        llama_fp4_attention_forward.store_means = True
 
     if args.visualize:
         llama_fp4_attention_forward.visualize = args.visualize
+        qwen3_fp4_attention_forward.visualize = args.visualize
 
-    if args.quantize:
-        llama_fp4_attention_forward.quantize_enabled = args.quantize.upper() if isinstance(args.quantize, str) else args.quantize
-
-    # Apply FP4 patches if quantize is enabled (and not using kvquant)
-    if args.quantize and not args.kvquant:
-        try:
-            patch_attention()   ## Enable FP4 attention
-        except:
-            print("Warning: can't replace attention")
-    
-    # Handle KVQuant model saving/loading
     if args.kvquant:
-        # Create a permanent directory for KVQuant models
-        model_short = args.model.split('/')[-1] if '/' in args.model else args.model
-        model_dir = f"kvquant_models/{model_short}_kvquant"
-        
-        # Check if model already exists
-        if os.path.exists(model_dir) and os.path.exists(os.path.join(model_dir, "config.json")):
-            print(f"Found existing KVQuant model at {model_dir}, loading from saved path")
-            args.model = model_dir
-        else:
-            print(f"Loading and quantizing model with KVQuant default settings")
-            model = get_kvquant_model(args.model)
-            
-            # Save the quantized model permanently
-            os.makedirs(model_dir, exist_ok=True)
-            model.save_pretrained(model_dir)
-            print(f"KVQuant model saved to: {model_dir}")
-            
-            # Update args.model to point to saved model
-            args.model = model_dir
-            
-            # Delete the model object to free memory before reloading
-            del model
-            torch.cuda.empty_cache()
+        args.quantize = False
+        model = get_kvquant_model(model_str)
+
+          
+    else:
+        patch_attention()
+        model = args.model
+        llama_fp4_attention_forward.quantize_enabled = args.quantize
+        qwen3_fp4_attention_forward.quantize_enabled = args.quantize
+    
     
     # Common evaluation path for both FP4 and KVQuant
     for max_length in [32768+1]:
         with torch.no_grad():
             results = calculate_perplexity(
-                model=args.model,
+                model=model,
                 tasks=args.task,
                 device="auto",
                 num_samples=args.num_samples,
@@ -300,16 +210,7 @@ def main():
                 **eval_kwargs
             )
         
-        if args.record_hessian:
-            task_str = "_".join(args.task) if len(args.task) > 1 else args.task[0]
-            save_qk_hessians(args.model, task_str, args.tag)
-        
-        if args.record_means:
-            task_str = "_".join(args.task) if len(args.task) > 1 else args.task[0]
-            save_k_means(args.model, task_str, args.tag)
-        
-        # export_memory_snapshot()
-        # stop_record_memory_history()
+
         print(f"Model: {args.model}")
         print(f"Max length: {max_length}")
         print(f"Quantize: {args.quantize}")
@@ -323,25 +224,16 @@ def main():
                     print(f"Metrics: {results['results']}")
 
             
-            # # Special formatting for pile_10k metrics
-            # if task == "pile_10k":
-            #     print_pile_10k_metrics(
-            #         metrics=results['results'][task],
-            #         tag=args.tag,
-            #         model=args.model,
-            #         quantize=args.quantize
-            #     )
-
         if args.output:
             output_filename = f"{args.output}_{args.tag}.json" if args.tag else args.output
             with open(output_filename, 'w') as f:
                 json.dump(results, f, indent=2, default=str)
     
-    if args.visualize:
-        # Create a combined tag that includes both the original tag and task names
-        task_str = "_".join(args.task)
-        combined_tag = f"{args.tag}_{task_str}" if args.tag else task_str
-        save_plots(combined_tag)
+    # if args.visualize:
+    #     # Create a combined tag that includes both the original tag and task names
+    #     task_str = "_".join(args.task)
+    #     combined_tag = f"{args.tag}_{task_str}" if args.tag else task_str
+    #     save_plots(combined_tag)
 
 if __name__ == "__main__":
     main() 
