@@ -49,13 +49,13 @@ def get_kvquant_model(model_name):
     return model
 
 
-def calculate_perplexity(model, tasks, num_samples=None, device="auto", max_length=2048, kv_quant_model=None, **eval_kwargs):
+def calculate_perplexity(model, tasks, num_samples=None, device="auto", max_length=2048, **eval_kwargs):
     """Calculate perplexity using lm_eval."""
     
     # Base arguments
     base_args = {
         "model": "hf",
-        "model_args": {"pretrained":model,"max_length":max_length,"trust_remote_code":True, "kv_quant_model":kv_quant_model},
+        "model_args": {"pretrained":model,"max_length":max_length,"trust_remote_code":True},
         "tasks": tasks,
         "batch_size": 1,
         "device": device,
@@ -224,7 +224,6 @@ def main():
                 device="auto",
                 num_samples=args.num_samples,
                 max_length=max_length,
-                kv_quant_model=kv_quant_model,
                 **eval_kwargs
             )
         

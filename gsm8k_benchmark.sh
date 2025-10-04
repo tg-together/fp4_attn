@@ -14,7 +14,7 @@ export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 export HF_HOME="/scratch/huggingface"
 export HF_TOKEN="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"
 
-if [ "$MODE" = "baseline"] || [ "$MODE" = "all" ]; then
+if [ "$MODE" = "baseline" ] || [ "$MODE" = "all" ]; then
     mkdir -p "logs/gsm8k_benchmark/baseline/"
     
     #baseline
