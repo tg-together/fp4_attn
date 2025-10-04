@@ -40,6 +40,8 @@ def get_kvquant_model(model_name):
     
     # Get quantized model
     model = run_kvquant(args, return_model=True)
+
+    print(f"KVQuant model fetched")
     
     # Remove from path
     sys.path.remove(kvquant_path)
@@ -47,15 +49,15 @@ def get_kvquant_model(model_name):
     return model
 
 
-def calculate_perplexity(model, tasks, num_samples=None, device="auto", max_length=2048, **eval_kwargs):
+def calculate_perplexity(model, tasks, num_samples=None, device="auto", max_length=2048, kv_quant_model=None, **eval_kwargs):
     """Calculate perplexity using lm_eval."""
     
     # Base arguments
     base_args = {
         "model": "hf",
-        "model_args": f"pretrained={model},max_length={max_length},trust_remote_code=True",
+        "model_args": {"pretrained":model,"max_length":max_length,"trust_remote_code":True, "kv_quant_model":kv_quant_model},
         "tasks": tasks,
-        "batch_size": 20,
+        "batch_size": 1,
         "device": device,
         "confirm_run_unsafe_code":True
     }
@@ -66,6 +68,7 @@ def calculate_perplexity(model, tasks, num_samples=None, device="auto", max_leng
     
     # Merge with additional eval arguments
     base_args.update(eval_kwargs)
+
     
     results = simple_evaluate(**base_args)
     return results
@@ -155,6 +158,20 @@ def patch_attention():
     transformers.models.llama.modeling_llama.LlamaForCausalLM.__init__ = patched_init_llama
     transformers.models.qwen3.modeling_qwen3.Qwen3ForCausalLM.__init__ = patched_init_qwen3
 
+def patch_lm_eval(kv_quant_model):
+    """Example patches for lm_eval.models.huggingface functions."""
+    # Need to import the specific submodule - lm_eval doesn't expose .models directly
+    from lm_eval.models import huggingface
+
+    
+    def patched_create_model(self, *args, **kwargs):
+
+        self._model = kv_quant_model
+        print(f"Using pre-initialized KVQuant model: {self._model}")
+        # Otherwise use original creation logic
+        return
+    
+    huggingface.HFLM._create_model = patched_create_model
 
 def main():
     args, eval_kwargs = parse_arguments()
@@ -188,12 +205,12 @@ def main():
 
     if args.kvquant:
         args.quantize = False
-        model = get_kvquant_model(model_str)
+        kv_quant_model = get_kvquant_model(model_str)
+        patch_lm_eval(kv_quant_model)
 
           
     else:
         patch_attention()
-        model = args.model
         llama_fp4_attention_forward.quantize_enabled = args.quantize
         qwen3_fp4_attention_forward.quantize_enabled = args.quantize
     
@@ -202,11 +219,12 @@ def main():
     for max_length in [32768+1]:
         with torch.no_grad():
             results = calculate_perplexity(
-                model=model,
+                model=args.model,
                 tasks=args.task,
                 device="auto",
                 num_samples=args.num_samples,
                 max_length=max_length,
+                kv_quant_model=kv_quant_model,
                 **eval_kwargs
             )
         

@@ -18,20 +18,7 @@ if [ "$MODE" = "baseline" ]; then
     mkdir -p "logs/aime_benchmark/baseline/"
     
     #baseline
-    
-    # Model and task configuration
-    MODEL="meta-llama/Llama-3.1-8B"
-    CUDA_VISIBLE_DEVICES=0  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --output "./logs/aime_benchmark/baseline/${MODEL##*/}_aime25.jsonl" 2>&1 | tee "logs/aime_benchmark/baseline/${MODEL##*/}_aime25.txt" &
-    
-    MODEL="meta-llama/Llama-3.1-70B"
-    CUDA_VISIBLE_DEVICES=1  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --output "./logs/aime_benchmark/baseline/${MODEL##*/}_aime25.jsonl" 2>&1 | tee "logs/aime_benchmark/baseline/${MODEL##*/}_aime25.txt" &
-    
-    MODEL="Qwen/Qwen3-8B"
-    CUDA_VISIBLE_DEVICES=2  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --output "./logs/aime_benchmark/baseline/${MODEL##*/}_aime25.jsonl" 2>&1 | tee "logs/aime_benchmark/baseline/${MODEL##*/}_aime25.txt" &
-    
-    MODEL="Qwen/Qwen3-4B"
-    CUDA_VISIBLE_DEVICES=3  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --output "./logs/aime_benchmark/baseline/${MODEL##*/}_aime25.jsonl" 2>&1 | tee "logs/aime_benchmark/baseline/${MODEL##*/}_aime25.txt" &
-    
+
     MODEL="meta-llama/Llama-3.2-3B-Instruct"
     CUDA_VISIBLE_DEVICES=4  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --output "./logs/aime_benchmark/baseline/${MODEL##*/}_aime25.jsonl" 2>&1 | tee "logs/aime_benchmark/baseline/${MODEL##*/}_aime25.txt" &
     
@@ -49,19 +36,7 @@ elif [ "$MODE" = "fp4" ]; then
     
     #FP4
     
-    # Model and task configuration
-    MODEL="meta-llama/Llama-3.1-8B"
-    CUDA_VISIBLE_DEVICES=0  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --quantize --output "./logs/aime_benchmark/fp4/${MODEL##*/}_aime25.jsonl" 2>&1 | tee "logs/aime_benchmark/fp4/${MODEL##*/}_aime25.txt" &
-    
-    MODEL="meta-llama/Llama-3.1-70B"
-    CUDA_VISIBLE_DEVICES=1  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --quantize --output "./logs/aime_benchmark/fp4/${MODEL##*/}_aime25.jsonl" 2>&1 | tee "logs/aime_benchmark/fp4/${MODEL##*/}_aime25.txt" &
-    
-    MODEL="Qwen/Qwen3-8B"
-    CUDA_VISIBLE_DEVICES=2  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --quantize --output "./logs/aime_benchmark/fp4/${MODEL##*/}_aime25.jsonl" 2>&1 | tee "logs/aime_benchmark/fp4/${MODEL##*/}_aime25.txt" &
-    
-    MODEL="Qwen/Qwen3-4B"
-    CUDA_VISIBLE_DEVICES=3  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --quantize --output "./logs/aime_benchmark/fp4/${MODEL##*/}_aime25.jsonl" 2>&1 | tee "logs/aime_benchmark/fp4/${MODEL##*/}_aime25.txt" &
-    
+
     MODEL="meta-llama/Llama-3.2-3B-Instruct"
     CUDA_VISIBLE_DEVICES=4  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --quantize --output "./logs/aime_benchmark/fp4/${MODEL##*/}_aime25.jsonl" 2>&1 | tee "logs/aime_benchmark/fp4/${MODEL##*/}_aime25.txt" &
     
@@ -79,19 +54,7 @@ elif [ "$MODE" = "kvquant" ]; then
     
     #KVquant
     
-    # Model and task configuration
-    MODEL="meta-llama/Llama-3.1-8B"
-    CUDA_VISIBLE_DEVICES=0  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --kvquant --output "./logs/aime_benchmark/kvquant/${MODEL##*/}_aime25.jsonl" 2>&1 | tee "logs/aime_benchmark/kvquant/${MODEL##*/}_aime25.txt" &
-    
-    MODEL="meta-llama/Llama-3.1-70B"
-    CUDA_VISIBLE_DEVICES=1  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --kvquant --output "./logs/aime_benchmark/kvquant/${MODEL##*/}_aime25.jsonl" 2>&1 | tee "logs/aime_benchmark/kvquant/${MODEL##*/}_aime25.txt" &
-    
-    MODEL="Qwen/Qwen3-8B"
-    CUDA_VISIBLE_DEVICES=2  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --kvquant --output "./logs/aime_benchmark/kvquant/${MODEL##*/}_aime25.jsonl" 2>&1 | tee "logs/aime_benchmark/kvquant/${MODEL##*/}_aime25.txt" &
-    
-    MODEL="Qwen/Qwen3-4B"
-    CUDA_VISIBLE_DEVICES=3  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --kvquant --output "./logs/aime_benchmark/kvquant/${MODEL##*/}_aime25.jsonl" 2>&1 | tee "logs/aime_benchmark/kvquant/${MODEL##*/}_aime25.txt" &
-    
+
     MODEL="meta-llama/Llama-3.2-3B-Instruct"
     CUDA_VISIBLE_DEVICES=4  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --kvquant --output "./logs/aime_benchmark/kvquant/${MODEL##*/}_aime25.jsonl" 2>&1 | tee "logs/aime_benchmark/kvquant/${MODEL##*/}_aime25.txt" &
     
