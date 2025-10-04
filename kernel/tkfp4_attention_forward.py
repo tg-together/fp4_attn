@@ -1,13 +1,13 @@
-from tkinter import Pack
-from typing import Optional, Unpack
+from typing import Unpack
+import math
 
 import torch
 from torch import nn
 
+# In your Python script or notebook
+import sys
+sys.path.insert(0, '/resource/ThunderKittens/kernels/attn/b200_fp4/b200_attn_fp4.cpython-312-x86_64-linux-gnu.so')
 import b200_attn_fp4
-
-# remove when gqa is supported
-from transformers.models.llama.modeling_llama import repeat_kv
 
 from einops import rearrange
 
@@ -77,6 +77,17 @@ def pack_scales_ue4m3_cuda(
     # We choose the format so that each CTA load it's own data (This is important for Q) as each CTA load different blocks of q
     # and thus we need to swizzle scales in order to minimize the number of memory accesses.
 
+    # Zeropad the scales so that the sequence dimension (the 3rd dim) is at least sp * sf
+    seq_dim = scales_per_tile.shape[2]
+    min_seq_dim = stages_packed * tiles_swizzling_factor
+    if seq_dim < min_seq_dim:
+        pad_len = min_seq_dim - seq_dim
+        # Pad on the end of the sequence dimension (dim=2)
+        pad_shape = list(scales_per_tile.shape)
+        pad_shape[2] = pad_len
+        pad_tensor = torch.zeros(*pad_shape, dtype=scales_per_tile.dtype, device=scales_per_tile.device)
+        scales_per_tile = torch.cat([scales_per_tile, pad_tensor], dim=2)
+
     interleaved_scales = rearrange(
         scales_per_tile, "b h (s sp sf) t d -> b h (s sf t) (sp d)", sf=tiles_swizzling_factor, sp=stages_packed
     )
@@ -88,7 +99,7 @@ def tkfp4_attention_forward(
     module: nn.Module,
     query: torch.Tensor,  # [b, h, n, d // 2], torch.uint8  2-packed FP4 big endian
     key: torch.Tensor,  # [b, h, n, d // 2], torch.uint8, 2-packed FP4 big endian
-    value: torch.Tensor,  # [b, h, n, d // 2], torch.uint8, 2-packed FP4 big endian
+    value: torch.Tensor,  # [b, h, n, d], torch.bfloat16
     query_uq: torch.Tensor,  # [b, h, n, d // 2] # unused for now
     key_uq: torch.Tensor,  # [b, h, n, d // 2] # unused for now
     casusal: bool,
@@ -112,26 +123,34 @@ def tkfp4_attention_forward(
     _key = key.contiguous()
     _value = value.to(torch.bfloat16).contiguous()
 
-    o = torch.empty(_query.shape, dtype=torch.bfloat16, device=query.device)
+    b, h, n, d = _query.shape
+
+    o = torch.empty((b, h, n, d * 2), dtype=torch.bfloat16, device=query.device)
 
     # These are kernel specific meta-parameters
     Q_TILE_HEIGHT = 128
     K_TILE_HEIGHT = 64
-    Q_SCALE_STAGES_PACKED = 2
-    K_SCALE_STAGES_PACKED = 8
-    Q_NUM_CTAS_SPLIT = 1
-    K_NUM_CTAS_SPLIT = 2
+    Q_SCALE_STAGES_PACKED = 8
+    K_SCALE_STAGES_PACKED = 16
+    Q_SWIZZLE_PER_TILE = 148 # The number of CTA groups we launch!
+    K_SWIZZLE_PERT_TILE = 1
+    TMEM_LANES = 32
+    BYTES_PER_LANE = 4
 
     # The function now accepts 4D tensors directly and returns packed 4D tensors
-    packed_query_scales = pack_scales_ue4m3_cuda(query_scales, Q_TILE_HEIGHT, Q_SCALE_STAGES_PACKED, Q_NUM_CTAS_SPLIT)
-    packed_key_scales = pack_scales_ue4m3_cuda(key_scales, K_TILE_HEIGHT, K_SCALE_STAGES_PACKED, K_NUM_CTAS_SPLIT)
+    packed_query_scales = pack_scales_ue4m3_cuda(query_scales, Q_TILE_HEIGHT, Q_SCALE_STAGES_PACKED, Q_SWIZZLE_PER_TILE, TMEM_LANES, BYTES_PER_LANE)
+    packed_key_scales = pack_scales_ue4m3_cuda(key_scales, K_TILE_HEIGHT, K_SCALE_STAGES_PACKED, K_SWIZZLE_PERT_TILE, TMEM_LANES, BYTES_PER_LANE)
 
     _packed_query_scales = packed_query_scales.contiguous()
     _packed_key_scales = packed_key_scales.contiguous()
 
+    print(_packed_query_scales.shape)
+
+    scaling_factor = 1 / math.sqrt(64) * query_scales2 * key_scales2
+
     if casusal:
         raise NotImplementedError("Causal mask not supported for now")
-        b200_attn_fp4.fwd_attend_ker_128_causal(
+        b200_attn_fp4.fwd_attend_ker_64_causal(
             _query,
             _packed_query_scales,
             _key,
@@ -140,19 +159,18 @@ def tkfp4_attention_forward(
             o,
         )
     else:
-        b200_attn_fp4.fwd_attend_ker_128_noncausal(
+        b200_attn_fp4.fwd_attend_ker_64_noncausal(
             _query,
             _packed_query_scales,
             _key,
             _packed_key_scales,
             _value,
             o,
+            float(scaling_factor.item()),
         )
 
-    o = o.transpose(1, 2).contiguous()
-
     # no attn_weights returned from kernel
-    return o, None
+    return o
 
 
 if __name__ == "__main__":
