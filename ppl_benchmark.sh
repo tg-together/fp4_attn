@@ -7,7 +7,7 @@ export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 export HF_HOME="/scratch/huggingface"
 export HF_TOKEN="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"
 
-if [ "$MODE" = "baseline" ]; then
+if [ "$MODE" = "baseline" ] || [ "$MODE" = "all" ]; then
     mkdir -p "logs/ppl_benchmark/baseline/"
     
     #baseline
@@ -25,19 +25,8 @@ if [ "$MODE" = "baseline" ]; then
     MODEL="Qwen/Qwen3-4B"
     CUDA_VISIBLE_DEVICES=3  python eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 2>&1 | tee "logs/ppl_benchmark/baseline/${MODEL##*/}_ppl.txt" &
     
-    MODEL="meta-llama/Llama-3.2-3B-Instruct"
-    CUDA_VISIBLE_DEVICES=4  python eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 2>&1 | tee "logs/ppl_benchmark/baseline/${MODEL##*/}_ppl.txt" &
-    
-    MODEL="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
-    CUDA_VISIBLE_DEVICES=5  python eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 2>&1 | tee "logs/ppl_benchmark/baseline/${MODEL##*/}_ppl.txt" &
-    
-    MODEL="meta-llama/Llama-3.3-70B-Instruct"
-    CUDA_VISIBLE_DEVICES=6  python eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 --batch_size 1 2>&1 | tee "logs/ppl_benchmark/baseline/${MODEL##*/}_ppl.txt" &
-    
-    MODEL="Qwen/Qwen3-4B-Thinking-2507"
-    CUDA_VISIBLE_DEVICES=7  python eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 2>&1 | tee "logs/ppl_benchmark/baseline/${MODEL##*/}_ppl.txt" &
 
-elif [ "$MODE" = "fp4" ]; then
+elif [ "$MODE" = "fp4" ] || [ "$MODE" = "all" ]; then
     mkdir -p "logs/ppl_benchmark/fp4/"
     
     #FP4
@@ -55,19 +44,8 @@ elif [ "$MODE" = "fp4" ]; then
     MODEL="Qwen/Qwen3-4B"
     CUDA_VISIBLE_DEVICES=3  python eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 --quantize 2>&1 | tee "logs/ppl_benchmark/fp4/${MODEL##*/}_ppl.txt" &
     
-    MODEL="meta-llama/Llama-3.2-3B-Instruct"
-    CUDA_VISIBLE_DEVICES=4  python eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 --quantize 2>&1 | tee "logs/ppl_benchmark/fp4/${MODEL##*/}_ppl.txt" &
-    
-    MODEL="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
-    CUDA_VISIBLE_DEVICES=5  python eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 --quantize 2>&1 | tee "logs/ppl_benchmark/fp4/${MODEL##*/}_ppl.txt" &
-    
-    MODEL="meta-llama/Llama-3.3-70B-Instruct"
-    CUDA_VISIBLE_DEVICES=6  python eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 --batch_size 1 --quantize 2>&1 | tee "logs/ppl_benchmark/fp4/${MODEL##*/}_ppl.txt" &
-    
-    MODEL="Qwen/Qwen3-4B-Thinking-2507"
-    CUDA_VISIBLE_DEVICES=7  python eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 --quantize 2>&1 | tee "logs/ppl_benchmark/fp4/${MODEL##*/}_ppl.txt" &
 
-elif [ "$MODE" = "kvquant" ]; then
+elif [ "$MODE" = "kvquant" ] || [ "$MODE" = "all" ]; then
     mkdir -p "logs/ppl_benchmark/kvquant/"
     
     #KVquant
@@ -85,15 +63,4 @@ elif [ "$MODE" = "kvquant" ]; then
     MODEL="Qwen/Qwen3-4B"
     CUDA_VISIBLE_DEVICES=3  python eval_ppl.py --model "${MODEL}" --dataset wikitext2  --kvquant --batch_size 1 2>&1 | tee "logs/ppl_benchmark/kvquant/${MODEL##*/}_ppl.txt" &
     
-    MODEL="meta-llama/Llama-3.2-3B-Instruct"
-    CUDA_VISIBLE_DEVICES=4  python eval_ppl.py --model "${MODEL}" --dataset wikitext2  --kvquant --batch_size 1 2>&1 | tee "logs/ppl_benchmark/kvquant/${MODEL##*/}_ppl.txt" &
-    
-    MODEL="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
-    CUDA_VISIBLE_DEVICES=5  python eval_ppl.py --model "${MODEL}" --dataset wikitext2  --kvquant --batch_size 1 2>&1 | tee "logs/ppl_benchmark/kvquant/${MODEL##*/}_ppl.txt" &
-    
-    MODEL="meta-llama/Llama-3.3-70B-Instruct"
-    CUDA_VISIBLE_DEVICES=6  python eval_ppl.py --model "${MODEL}" --dataset wikitext2  --batch_size 1 --kvquant --batch_size 1 2>&1 | tee "logs/ppl_benchmark/kvquant/${MODEL##*/}_ppl.txt" &
-    
-    MODEL="Qwen/Qwen3-4B-Thinking-2507"
-    CUDA_VISIBLE_DEVICES=7  python eval_ppl.py --model "${MODEL}" --dataset wikitext2  --kvquant --batch_size 1 2>&1 | tee "logs/ppl_benchmark/kvquant/${MODEL##*/}_ppl.txt" &
 fi

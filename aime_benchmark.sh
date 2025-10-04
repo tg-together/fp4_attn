@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Select which mode to run: baseline, fp4, or kvquant
-MODE="baseline"  # Options: baseline, fp4, kvquant
+MODE="all"  # Options: baseline, fp4, kvquant
 
 # Task-specific configuration
 TASK="aime25"
@@ -14,7 +14,7 @@ export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 export HF_HOME="/scratch/huggingface"
 export HF_TOKEN="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"
 
-if [ "$MODE" = "baseline" ]; then
+if [ "$MODE" = "baseline" ] || [ "$MODE" = "all" ]; then
     mkdir -p "logs/aime_benchmark/baseline/"
     
     #baseline
@@ -31,7 +31,7 @@ if [ "$MODE" = "baseline" ]; then
     MODEL="Qwen/Qwen3-4B-Thinking-2507"
     CUDA_VISIBLE_DEVICES=7  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --output "./logs/aime_benchmark/baseline/${MODEL##*/}_aime25.jsonl" 2>&1 | tee "logs/aime_benchmark/baseline/${MODEL##*/}_aime25.txt" &
 
-elif [ "$MODE" = "fp4" ]; then
+elif [ "$MODE" = "fp4" ] || [ "$MODE" = "all" ]; then
     mkdir -p "logs/aime_benchmark/fp4/"
     
     #FP4
@@ -49,7 +49,7 @@ elif [ "$MODE" = "fp4" ]; then
     MODEL="Qwen/Qwen3-4B-Thinking-2507"
     CUDA_VISIBLE_DEVICES=7  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --quantize --output "./logs/aime_benchmark/fp4/${MODEL##*/}_aime25.jsonl" 2>&1 | tee "logs/aime_benchmark/fp4/${MODEL##*/}_aime25.txt" &
 
-elif [ "$MODE" = "kvquant" ]; then
+elif [ "$MODE" = "kvquant" ] || [ "$MODE" = "all" ]; then
     mkdir -p "logs/aime_benchmark/kvquant/"
     
     #KVquant
