@@ -83,7 +83,7 @@ def parse_arguments():
     parser.add_argument("--visualize", action="store_true", help="Enable QKV visualization")
     parser.add_argument("--record_hessian", action="store_true", help="Record Q Hessian")
     parser.add_argument("--record_means", action="store_true", help="Record K means")
-    parser.add_argument("--quantize", type=str, default="", help="Selective FP4 quantization; subset of 'QKVP'")
+    parser.add_argument('--quantize', action='store_true')
     parser.add_argument("--tag", default="", help="Tag to append to filenames")
     parser.add_argument("--task", nargs='+', default=["pile_10k", "gsm8k"], help="Task(s) to evaluate (can specify multiple)")
     parser.add_argument("--hessian_dataset", type=str, default="wikitext2", help="Dataset name to load hessians from (e.g., 'pile_10k')")
