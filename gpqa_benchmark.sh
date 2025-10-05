@@ -14,55 +14,116 @@ export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 export HF_HOME="/scratch/huggingface"
 export HF_TOKEN="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"
 
-if [ "$MODE" = "baseline" ] || [ "$MODE" = "all" ]; then
+if [ "$MODE" = "baseline" ]; then
     mkdir -p "logs/gpqa_benchmark/baseline/"
     
-    #baseline
+    # Run non-70B models sequentially for baseline on single GPU
+    (
+        MODEL="meta-llama/Llama-3.2-3B-Instruct"
+        CUDA_VISIBLE_DEVICES=0  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --output "./logs/gpqa_benchmark/baseline/${MODEL##*/}_gpqa.jsonl" 2>&1 | tee "logs/gpqa_benchmark/baseline/${MODEL##*/}_gpqa.txt"
+        
+        MODEL="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
+        CUDA_VISIBLE_DEVICES=0  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --output "./logs/gpqa_benchmark/baseline/${MODEL##*/}_gpqa.jsonl" 2>&1 | tee "logs/gpqa_benchmark/baseline/${MODEL##*/}_gpqa.txt"
+        
+        MODEL="Qwen/Qwen3-4B-Thinking-2507"
+        CUDA_VISIBLE_DEVICES=0  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --output "./logs/gpqa_benchmark/baseline/${MODEL##*/}_gpqa.jsonl" 2>&1 | tee "logs/gpqa_benchmark/baseline/${MODEL##*/}_gpqa.txt"
+    ) &
+    
+    # Run 70B model for baseline on 2 GPUs
+    MODEL="meta-llama/Llama-3.3-70B-Instruct"
+    CUDA_VISIBLE_DEVICES=1,2  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --output "./logs/gpqa_benchmark/baseline/${MODEL##*/}_gpqa.jsonl" 2>&1 | tee "logs/gpqa_benchmark/baseline/${MODEL##*/}_gpqa.txt" &
 
+elif [ "$MODE" = "all" ]; then
+    mkdir -p "logs/gpqa_benchmark/baseline/"
+    mkdir -p "logs/gpqa_benchmark/kvquant/"
+    mkdir -p "logs/gpqa_benchmark/fp4/"
+    
+    # Run non-70B models sequentially for baseline and kvquant on single GPU
+    (
+        # Baseline non-70B models
+        MODEL="meta-llama/Llama-3.2-3B-Instruct"
+        CUDA_VISIBLE_DEVICES=0  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --output "./logs/gpqa_benchmark/baseline/${MODEL##*/}_gpqa.jsonl" 2>&1 | tee "logs/gpqa_benchmark/baseline/${MODEL##*/}_gpqa.txt"
+        
+        MODEL="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
+        CUDA_VISIBLE_DEVICES=0  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --output "./logs/gpqa_benchmark/baseline/${MODEL##*/}_gpqa.jsonl" 2>&1 | tee "logs/gpqa_benchmark/baseline/${MODEL##*/}_gpqa.txt"
+        
+        MODEL="Qwen/Qwen3-4B-Thinking-2507"
+        CUDA_VISIBLE_DEVICES=0  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --output "./logs/gpqa_benchmark/baseline/${MODEL##*/}_gpqa.jsonl" 2>&1 | tee "logs/gpqa_benchmark/baseline/${MODEL##*/}_gpqa.txt"
+        
+        # KVquant non-70B models
+        MODEL="meta-llama/Llama-3.2-3B-Instruct"
+        CUDA_VISIBLE_DEVICES=0  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --kvquant --output "./logs/gpqa_benchmark/kvquant/${MODEL##*/}_gpqa.jsonl" 2>&1 | tee "logs/gpqa_benchmark/kvquant/${MODEL##*/}_gpqa.txt"
+        
+        MODEL="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
+        CUDA_VISIBLE_DEVICES=0  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --kvquant --output "./logs/gpqa_benchmark/kvquant/${MODEL##*/}_gpqa.jsonl" 2>&1 | tee "logs/gpqa_benchmark/kvquant/${MODEL##*/}_gpqa.txt"
+        
+        MODEL="Qwen/Qwen3-4B-Thinking-2507"
+        CUDA_VISIBLE_DEVICES=0  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --kvquant --output "./logs/gpqa_benchmark/kvquant/${MODEL##*/}_gpqa.jsonl" 2>&1 | tee "logs/gpqa_benchmark/kvquant/${MODEL##*/}_gpqa.txt"
+    ) &
+    
+    # Run 70B models sequentially for baseline and kvquant on 2 GPUs
+    (
+        # Baseline 70B model
+        MODEL="meta-llama/Llama-3.3-70B-Instruct"
+        CUDA_VISIBLE_DEVICES=1,2  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --output "./logs/gpqa_benchmark/baseline/${MODEL##*/}_gpqa.jsonl" 2>&1 | tee "logs/gpqa_benchmark/baseline/${MODEL##*/}_gpqa.txt"
+        
+        # KVquant 70B model
+        MODEL="meta-llama/Llama-3.3-70B-Instruct"
+        CUDA_VISIBLE_DEVICES=1,2  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --kvquant --output "./logs/gpqa_benchmark/kvquant/${MODEL##*/}_gpqa.jsonl" 2>&1 | tee "logs/gpqa_benchmark/kvquant/${MODEL##*/}_gpqa.txt"
+    ) &
+    
+    # FP4 70B model on 2 GPUs
+    MODEL="meta-llama/Llama-3.3-70B-Instruct"
+    CUDA_VISIBLE_DEVICES=3,4  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --quantize --output "./logs/gpqa_benchmark/fp4/${MODEL##*/}_gpqa.jsonl" 2>&1 | tee "logs/gpqa_benchmark/fp4/${MODEL##*/}_gpqa.txt" &
+    
+    # FP4 non-70B models on 3 different GPUs
     MODEL="meta-llama/Llama-3.2-3B-Instruct"
-    CUDA_VISIBLE_DEVICES=0  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --output "./logs/gpqa_benchmark/baseline/${MODEL##*/}_gpqa.jsonl" 2>&1 | tee "logs/gpqa_benchmark/baseline/${MODEL##*/}_gpqa.txt" &
+    CUDA_VISIBLE_DEVICES=5  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --quantize --output "./logs/gpqa_benchmark/fp4/${MODEL##*/}_gpqa.jsonl" 2>&1 | tee "logs/gpqa_benchmark/fp4/${MODEL##*/}_gpqa.txt" &
     
     MODEL="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
-    CUDA_VISIBLE_DEVICES=1  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --output "./logs/gpqa_benchmark/baseline/${MODEL##*/}_gpqa.jsonl" 2>&1 | tee "logs/gpqa_benchmark/baseline/${MODEL##*/}_gpqa.txt" &
-    
-    # MODEL="meta-llama/Llama-3.3-70B-Instruct"
-    # CUDA_VISIBLE_DEVICES=0,1  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --output "./logs/gpqa_benchmark/baseline/${MODEL##*/}_gpqa.jsonl" 2>&1 | tee "logs/gpqa_benchmark/baseline/${MODEL##*/}_gpqa.txt" &
+    CUDA_VISIBLE_DEVICES=6  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --quantize --output "./logs/gpqa_benchmark/fp4/${MODEL##*/}_gpqa.jsonl" 2>&1 | tee "logs/gpqa_benchmark/fp4/${MODEL##*/}_gpqa.txt" &
     
     MODEL="Qwen/Qwen3-4B-Thinking-2507"
-    CUDA_VISIBLE_DEVICES=2  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --output "./logs/gpqa_benchmark/baseline/${MODEL##*/}_gpqa.jsonl" 2>&1 | tee "logs/gpqa_benchmark/baseline/${MODEL##*/}_gpqa.txt" &
+    CUDA_VISIBLE_DEVICES=7  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --quantize --output "./logs/gpqa_benchmark/fp4/${MODEL##*/}_gpqa.jsonl" 2>&1 | tee "logs/gpqa_benchmark/fp4/${MODEL##*/}_gpqa.txt" &
 
-elif [ "$MODE" = "fp4" ] || [ "$MODE" = "all" ]; then
+elif [ "$MODE" = "fp4" ]; then
     mkdir -p "logs/gpqa_benchmark/fp4/"
     
     #FP4
     
+    # FP4 70B model on 2 GPUs
+    MODEL="meta-llama/Llama-3.3-70B-Instruct"
+    CUDA_VISIBLE_DEVICES=3,4  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --quantize --output "./logs/gpqa_benchmark/fp4/${MODEL##*/}_gpqa.jsonl" 2>&1 | tee "logs/gpqa_benchmark/fp4/${MODEL##*/}_gpqa.txt" &
+    
+    # FP4 non-70B models on 3 different GPUs
     MODEL="meta-llama/Llama-3.2-3B-Instruct"
-    CUDA_VISIBLE_DEVICES=3  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --quantize --output "./logs/gpqa_benchmark/fp4/${MODEL##*/}_gpqa.jsonl" 2>&1 | tee "logs/gpqa_benchmark/fp4/${MODEL##*/}_gpqa.txt" &
+    CUDA_VISIBLE_DEVICES=5  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --quantize --output "./logs/gpqa_benchmark/fp4/${MODEL##*/}_gpqa.jsonl" 2>&1 | tee "logs/gpqa_benchmark/fp4/${MODEL##*/}_gpqa.txt" &
     
     MODEL="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
-    CUDA_VISIBLE_DEVICES=4  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --quantize --output "./logs/gpqa_benchmark/fp4/${MODEL##*/}_gpqa.jsonl" 2>&1 | tee "logs/gpqa_benchmark/fp4/${MODEL##*/}_gpqa.txt" &
-    
-    # MODEL="meta-llama/Llama-3.3-70B-Instruct"
-    # CUDA_VISIBLE_DEVICES=2,3  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --quantize --output "./logs/gpqa_benchmark/fp4/${MODEL##*/}_gpqa.jsonl" 2>&1 | tee "logs/gpqa_benchmark/fp4/${MODEL##*/}_gpqa.txt" &
+    CUDA_VISIBLE_DEVICES=6  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --quantize --output "./logs/gpqa_benchmark/fp4/${MODEL##*/}_gpqa.jsonl" 2>&1 | tee "logs/gpqa_benchmark/fp4/${MODEL##*/}_gpqa.txt" &
     
     MODEL="Qwen/Qwen3-4B-Thinking-2507"
-    CUDA_VISIBLE_DEVICES=5  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --quantize --output "./logs/gpqa_benchmark/fp4/${MODEL##*/}_gpqa.jsonl" 2>&1 | tee "logs/gpqa_benchmark/fp4/${MODEL##*/}_gpqa.txt" &
+    CUDA_VISIBLE_DEVICES=7  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --quantize --output "./logs/gpqa_benchmark/fp4/${MODEL##*/}_gpqa.jsonl" 2>&1 | tee "logs/gpqa_benchmark/fp4/${MODEL##*/}_gpqa.txt" &
 
-elif [ "$MODE" = "kvquant" ] || [ "$MODE" = "all" ]; then
+elif [ "$MODE" = "kvquant" ]; then
     mkdir -p "logs/gpqa_benchmark/kvquant/"
     
     #KVquant
-
-    MODEL="meta-llama/Llama-3.2-3B-Instruct"
-    CUDA_VISIBLE_DEVICES=6  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --kvquant --output "./logs/gpqa_benchmark/kvquant/${MODEL##*/}_gpqa.jsonl" 2>&1 | tee "logs/gpqa_benchmark/kvquant/${MODEL##*/}_gpqa.txt" &
     
-    MODEL="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
-    CUDA_VISIBLE_DEVICES=7  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --kvquant --output "./logs/gpqa_benchmark/kvquant/${MODEL##*/}_gpqa.jsonl" 2>&1 | tee "logs/gpqa_benchmark/kvquant/${MODEL##*/}_gpqa.txt" &
+    # Run non-70B models sequentially on single GPU
+    (
+        MODEL="meta-llama/Llama-3.2-3B-Instruct"
+        CUDA_VISIBLE_DEVICES=0  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --kvquant --output "./logs/gpqa_benchmark/kvquant/${MODEL##*/}_gpqa.jsonl" 2>&1 | tee "logs/gpqa_benchmark/kvquant/${MODEL##*/}_gpqa.txt"
+        
+        MODEL="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
+        CUDA_VISIBLE_DEVICES=0  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --kvquant --output "./logs/gpqa_benchmark/kvquant/${MODEL##*/}_gpqa.jsonl" 2>&1 | tee "logs/gpqa_benchmark/kvquant/${MODEL##*/}_gpqa.txt"
+        
+        MODEL="Qwen/Qwen3-4B-Thinking-2507"
+        CUDA_VISIBLE_DEVICES=0  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --kvquant --output "./logs/gpqa_benchmark/kvquant/${MODEL##*/}_gpqa.jsonl" 2>&1 | tee "logs/gpqa_benchmark/kvquant/${MODEL##*/}_gpqa.txt"
+    ) &
     
-    # MODEL="meta-llama/Llama-3.3-70B-Instruct"
-    # CUDA_VISIBLE_DEVICES=4,5  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --kvquant --output "./logs/gpqa_benchmark/kvquant/${MODEL##*/}_gpqa.jsonl" 2>&1 | tee "logs/gpqa_benchmark/kvquant/${MODEL##*/}_gpqa.txt" &
-    
-    # MODEL="Qwen/Qwen3-4B-Thinking-2507"
-    # CUDA_VISIBLE_DEVICES=6  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --kvquant --output "./logs/gpqa_benchmark/kvquant/${MODEL##*/}_gpqa.jsonl" 2>&1 | tee "logs/gpqa_benchmark/kvquant/${MODEL##*/}_gpqa.txt" &
+    # Run 70B model on 2 GPUs
+    MODEL="meta-llama/Llama-3.3-70B-Instruct"
+    CUDA_VISIBLE_DEVICES=1,2  python lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --kvquant --output "./logs/gpqa_benchmark/kvquant/${MODEL##*/}_gpqa.jsonl" 2>&1 | tee "logs/gpqa_benchmark/kvquant/${MODEL##*/}_gpqa.txt" &
 
 fi
