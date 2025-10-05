@@ -53,7 +53,7 @@ class FP4Quantizer(nn.Module):
 
         if self.global_sf_max is not None:
 
-            global_sf = torch.max(abs(x), dim=-1, keepdim=True)[0].to(torch.float32)
+            global_sf = torch.max(abs(x)).to(torch.float32)
             global_sf = global_sf * self.get_reciprocal(self.global_sf_max)
 
             x=x*self.get_reciprocal(global_sf)

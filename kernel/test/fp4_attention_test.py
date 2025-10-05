@@ -80,8 +80,8 @@ class MockModule:
 
 
 @pytest.mark.skipif(not TEST_CONFIG["attention_fp4"], reason="FP4 attention test disabled in TEST_CONFIG")
-@pytest.mark.parametrize("batch_size", [2])
-@pytest.mark.parametrize("seq_len", [256])
+@pytest.mark.parametrize("batch_size", [1, 2])
+@pytest.mark.parametrize("seq_len", [128, 256])
 def test_attention_fp4(batch_size, seq_len):
     """Test FP4 attention without causal masking."""
     if not torch.cuda.is_available():
