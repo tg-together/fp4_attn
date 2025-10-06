@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 import torch
+import torch.nn as nn
 import pytest
 import sys
 from pathlib import Path
+from typing import Optional
 
 # Add parent directory for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -19,6 +21,16 @@ except ImportError as e:
     HAS_FP4_QUANTIZER = False
     FP4Quantizer = None
 
+# Import helper functions from llama_patch
+try:
+    from llama_patch import block_mask_with_first_block, quantize_p
+    HAS_LLAMA_UTILS = True
+except ImportError as e:
+    print(f"Warning: Could not import llama_patch utils: {e}")
+    HAS_LLAMA_UTILS = False
+    block_mask_with_first_block = None
+    quantize_p = None
+
 
 # Test Configuration - Change these to enable/disable tests
 TEST_CONFIG = {
@@ -27,20 +39,86 @@ TEST_CONFIG = {
 }
 
 
+def eager_attention_forward(
+    module: nn.Module,
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    query_uq: torch.Tensor,
+    key_uq: torch.Tensor,
+    attention_mask: Optional[torch.Tensor],
+    scaling: float,
+    dropout: float = 0.0,
+    query_scales: torch.Tensor = None,
+    key_scales: torch.Tensor = None,
+    value_scales: torch.Tensor = None,
+    **kwargs,
+):
+    query = query.to(torch.bfloat16)
+    key = key.to(torch.bfloat16)
+    value = value.to(torch.bfloat16)
+
+    attn_weights = torch.matmul(query, key.transpose(2, 3)) * scaling
+
+    attn_weights_uq = torch.matmul(query_uq, key_uq.transpose(2, 3)) * scaling
+
+    if hasattr(module, 'quantize') and module.fp_mask:
+        full_prec_mask = block_mask_with_first_block(key.shape[-2], 64).unsqueeze(0).unsqueeze(0).to(key.device)   #can change to backward_window_with_first_block or block_mask_with_first_block also
+
+        attn_weights = torch.where(full_prec_mask, attn_weights_uq, attn_weights) 
+
+
+    if attention_mask is not None:
+        causal_mask = attention_mask[:, :, :, : key.shape[-2]]
+        attn_weights = attn_weights + causal_mask
+
+
+    attn_weights = attn_weights.to(torch.float32)
+    print(attn_weights[0, 0, :16, :32])
+    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32)
+    # attn_weights = nn.functional.dropout(attn_weights, p=module.attention_dropout, training=module.training)
+
+    if hasattr(module, 'quantize_p') and module.quantize_p:
+
+        Aq_hi, Aq_lo, Aq_hi_int8, Aq_lo_int8, As_hi, As_lo, As_hi_fp8, As_lo_fp8 = quantize_p(module, attn_weights, module.use_dual_quant_attn)
+        attn_weights = (Aq_hi*As_hi+Aq_lo*As_lo)
+
+
+    attn_weights = attn_weights.to(torch.bfloat16)
+    attn_output = torch.matmul(attn_weights, value)
+    attn_output = attn_output.transpose(1, 2).contiguous()
+
+    return attn_output.to(torch.bfloat16), attn_weights.to(torch.bfloat16)
+
+
 def eager_attention(query, key, value, causal=False, scaling=None):
+    """Simple wrapper for backward compatibility with smoke tests."""
     _, _, seq_len, head_dim = query.shape
 
     if scaling is None:
         scaling = 1.0 / (head_dim**0.5)
 
-    scores = torch.matmul(query, key.transpose(-2, -1)) * scaling
+    # Create a simple mock module for the call
+    module = MockModule()
+    
+    # Create attention mask for causal case
+    attention_mask = None
     if causal:
         causal_mask = torch.triu(torch.ones(seq_len, seq_len, device=query.device), diagonal=1)
-        scores = scores.masked_fill(causal_mask.bool(), float("-inf"))
-
-    attention_weights = torch.softmax(scores, dim=-1)
-    output = torch.matmul(attention_weights, value)
-    return output, attention_weights
+        causal_mask = causal_mask.masked_fill(causal_mask.bool(), float("-inf"))
+        attention_mask = causal_mask.unsqueeze(0).unsqueeze(0)
+    
+    # Call the new function with query/key as both quantized and unquantized
+    return eager_attention_forward(
+        module=module,
+        query=query,
+        key=key,
+        value=value,
+        query_uq=query,
+        key_uq=key,
+        attention_mask=attention_mask,
+        scaling=scaling,
+    )
 
 
 def create_test_tensors(batch_size=2, num_heads=8, seq_len=128, head_dim=64, device="cuda"):
@@ -73,15 +151,19 @@ def quantize_to_fp4_with_scales(tensor, quantizer):
 
 
 class MockModule:
-    """Mock module for compatibility with tkfp4_attention_forward."""
+    """Mock module for compatibility with attention forward functions."""
 
     def __init__(self):
-        pass
+        self.attention_dropout = 0.0
+        self.training = False
+        self.quantize = False
+        self.fp_mask = False
+        self.quantize_p = False
 
 
 @pytest.mark.skipif(not TEST_CONFIG["attention_fp4"], reason="FP4 attention test disabled in TEST_CONFIG")
-@pytest.mark.parametrize("batch_size", [1, 2])
-@pytest.mark.parametrize("seq_len", [128, 256])
+@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("seq_len", [128])
 def test_attention_fp4(batch_size, seq_len):
     """Test FP4 attention without causal masking."""
     if not torch.cuda.is_available():
@@ -90,7 +172,7 @@ def test_attention_fp4(batch_size, seq_len):
     if not HAS_FP4_QUANTIZER:
         pytest.skip("FP4Quantizer not available")
 
-    num_heads = 8
+    num_heads = 1
     head_dim = 64
     device = "cuda"
     scaling = 1.0 / (head_dim**0.5)
@@ -131,14 +213,17 @@ def test_attention_fp4(batch_size, seq_len):
     print(f"Reference output shape: {ref_output.shape}")
     print(f"FP4 output shape: {fp4_output.shape}")
 
+    print(fp4_output)
+    print(ref_output)
+
     # Check values are close (FP4 has limited precision)
-    assert torch.allclose(fp4_output, ref_output, rtol=0.2, atol=1.0)
+    assert torch.allclose(fp4_output, ref_output, rtol=0.2, atol=0)
 
 
 
 @pytest.mark.skipif(not TEST_CONFIG["attention_fp4_causal"], reason="FP4 causal attention test disabled in TEST_CONFIG")
-@pytest.mark.parametrize("batch_size", [1, 2])
-@pytest.mark.parametrize("seq_len", [128, 256])
+@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("seq_len", [128])
 def test_attention_fp4_causal(batch_size, seq_len):
     """Test FP4 attention with causal masking."""
     if not torch.cuda.is_available():

@@ -3,6 +3,7 @@ import math
 
 import torch
 from torch import nn
+import torch.nn.functional as F
 
 # In your Python script or notebook
 import sys
@@ -27,14 +28,14 @@ TESTING = True
 def pack_scales_ue4m3_cuda(
     scales_4d: torch.Tensor,
     MN_tile_height: int = 128,
-    stages_packed: int = 2,  # The number of stages to pack into a single tile
+    stages_packed: int = 2,  # The number of groups to pack into a single tile
     tiles_swizzling_factor: int = 2,  # How we should swizzle each packed tile along the sequence dimension
+    swizzle_group_size: int  = 2, # The number of micro-tiles to group for swizzling
     tmem_lanes: int = 32,  # The number of rows to store data
     bytes_per_lane: int = 4,  # The number of bytes per column in a TMEM lane
 ) -> torch.Tensor:
     # Accept 4D tensor [b, h, n, d] and reshape internally
-    _, _, _, d = scales_4d.shape
-    assert scales_4d.is_cuda and scales_4d.ndim == 4, "Input must be 4D CUDA tensor [b, h, n, d]"
+    d = scales_4d.shape[-1]
 
     PACKED_TILE_WIDTH = d * (MN_tile_height // tmem_lanes) * stages_packed
     if not TESTING:
@@ -59,7 +60,7 @@ def pack_scales_ue4m3_cuda(
 
         scales_per_tile = rearrange(
             scales_4d,
-            "b h (s r tmem_lanes) d -> b h s tmem_lanes (r d)",
+            "... (s r tmem_lanes) d -> ... s tmem_lanes (r d)",
             r=INTRA_TILE_HEIGHT_SWIZZLE_FACTOR,
             tmem_lanes=tmem_lanes,
         )
@@ -77,19 +78,21 @@ def pack_scales_ue4m3_cuda(
     # We choose the format so that each CTA load it's own data (This is important for Q) as each CTA load different blocks of q
     # and thus we need to swizzle scales in order to minimize the number of memory accesses.
 
-    # Zeropad the scales so that the sequence dimension (the 3rd dim) is at least sp * sf
-    seq_dim = scales_per_tile.shape[2]
-    min_seq_dim = stages_packed * tiles_swizzling_factor
-    if seq_dim < min_seq_dim:
-        pad_len = min_seq_dim - seq_dim
-        # Pad on the end of the sequence dimension (dim=2)
-        pad_shape = list(scales_per_tile.shape)
-        pad_shape[2] = pad_len
-        pad_tensor = torch.zeros(*pad_shape, dtype=scales_per_tile.dtype, device=scales_per_tile.device)
-        scales_per_tile = torch.cat([scales_per_tile, pad_tensor], dim=2)
+    seq_dim = scales_per_tile.shape[-3]
+    min_seq_dim = stages_packed * tiles_swizzling_factor * swizzle_group_size
+    pad_len = (min_seq_dim - (seq_dim % min_seq_dim))
+    if pad_len > 0:
+        # Pad the sequence dimension (dim=2)
+        pad = (0, 0, 0, 0, 0, pad_len)
+        scales_per_tile = F.pad(scales_per_tile, pad=pad, mode='constant', value=0)
 
+    # Now, safely reshape
     interleaved_scales = rearrange(
-        scales_per_tile, "b h (s sp sf) t d -> b h (s sf t) (sp d)", sf=tiles_swizzling_factor, sp=stages_packed
+        scales_per_tile,
+        "... (s sp sf gs) t d -> ... (s sf t) (sp gs d)",
+        sf=tiles_swizzling_factor,
+        sp=stages_packed,
+        gs=swizzle_group_size,
     )
 
     return interleaved_scales
@@ -110,13 +113,17 @@ def tkfp4_attention_forward(
     key_scales2: torch.Tensor = None,  # Single float32 value
     **kwargs: Unpack[TransformersKwargs],
 ):
-    print(f"query: {query.shape}, {query.dtype}")
-    print(f"key: {key.shape}, {key.dtype}")
-    print(f"value: {value.shape}, {value.dtype}")
-    if query_scales is not None:
-        print(f"query_scales: {query_scales.shape}, {query_scales.dtype}")
-    if key_scales is not None:
-        print(f"key_scales: {key_scales.shape}, {key_scales.dtype}")
+    # These are kernel specific meta-parameters
+    Q_TILE_HEIGHT = 128
+    K_TILE_HEIGHT = 64
+    Q_SCALE_STAGES_PACKED = 4 # <- This is a factor of 2 lower as we have a group_size = 2
+    K_SCALE_STAGES_PACKED = 16
+    Q_SWIZZLE_PER_TILE = 148 * 2 # The number of CTA's we launch
+    Q_SWIZZLE_GROUP_SIZE = 2 # The number of consumers within each CTA
+    K_SWIZZLE_PERT_TILE = 1
+    K_SWIZZLE_GROUP_SIZE = 1
+    TMEM_LANES = 32
+    BYTES_PER_LANE = 4
 
     # update as kernel interface changes
     _query = query.contiguous()
@@ -127,19 +134,17 @@ def tkfp4_attention_forward(
 
     o = torch.empty((b, h, n, d * 2), dtype=torch.bfloat16, device=query.device)
 
-    # These are kernel specific meta-parameters
-    Q_TILE_HEIGHT = 128
-    K_TILE_HEIGHT = 64
-    Q_SCALE_STAGES_PACKED = 8
-    K_SCALE_STAGES_PACKED = 16
-    Q_SWIZZLE_PER_TILE = 148 # The number of CTA groups we launch!
-    K_SWIZZLE_PERT_TILE = 1
-    TMEM_LANES = 32
-    BYTES_PER_LANE = 4
+    import pdb; pdb.set_trace()
+
+
+    padding = (0, 0, 0, (Q_SWIZZLE_GROUP_SIZE * Q_TILE_HEIGHT) - (n % (Q_SWIZZLE_GROUP_SIZE * Q_TILE_HEIGHT)))
+    query_scales = F.pad(query_scales, pad=padding, mode='constant', value=0) # Zero pad so that we have enough
+    query_scales = rearrange(query_scales, "b h n d -> (b h n) d") # We need to pack query values
+
 
     # The function now accepts 4D tensors directly and returns packed 4D tensors
-    packed_query_scales = pack_scales_ue4m3_cuda(query_scales, Q_TILE_HEIGHT, Q_SCALE_STAGES_PACKED, Q_SWIZZLE_PER_TILE, TMEM_LANES, BYTES_PER_LANE)
-    packed_key_scales = pack_scales_ue4m3_cuda(key_scales, K_TILE_HEIGHT, K_SCALE_STAGES_PACKED, K_SWIZZLE_PERT_TILE, TMEM_LANES, BYTES_PER_LANE)
+    packed_query_scales = pack_scales_ue4m3_cuda(query_scales, Q_TILE_HEIGHT, Q_SCALE_STAGES_PACKED, Q_SWIZZLE_PER_TILE, Q_SWIZZLE_GROUP_SIZE, TMEM_LANES, BYTES_PER_LANE)
+    packed_key_scales = pack_scales_ue4m3_cuda(key_scales, K_TILE_HEIGHT, K_SCALE_STAGES_PACKED, K_SWIZZLE_PERT_TILE, K_SWIZZLE_GROUP_SIZE, TMEM_LANES, BYTES_PER_LANE)
 
     _packed_query_scales = packed_query_scales.contiguous()
     _packed_key_scales = packed_key_scales.contiguous()
@@ -170,6 +175,7 @@ def tkfp4_attention_forward(
         )
 
     # no attn_weights returned from kernel
+    o = o.transpose(1, 2)
     return o
 
 
