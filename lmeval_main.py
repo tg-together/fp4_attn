@@ -20,8 +20,10 @@ import numpy as np
 def get_kvquant_model(model_name):
     """Get KVQuant quantized model with default settings from run.sh"""
     # Add KVQuant path to sys.path
-    kvquant_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'KVQuant', 'quant')
-    kvquant_path_root = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'KVQuant')
+    kvquant_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'KVquant_baseline', 'quant')
+    kvquant_path_root = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'KVquant_baseline')
+    print(f"KVQuant path: {kvquant_path}")
+    print(f"KVQuant path root: {kvquant_path_root}")
     sys.path.insert(0, kvquant_path)
     
     from llama_simquant import run_kvquant, create_parser
