@@ -53,7 +53,7 @@ class FP4Quantizer(nn.Module):
 
         if self.global_sf_max is not None:
 
-            global_sf = torch.max(abs(x)).to(torch.float32)
+            global_sf = torch.max(abs(x), dim=-1)[0].to(torch.float32)
             global_sf = global_sf * self.get_reciprocal(self.global_sf_max)
 
             x=x*self.get_reciprocal(global_sf)
@@ -100,7 +100,6 @@ class FP4Quantizer(nn.Module):
         reconstructed_f32 = torch.empty(m * (n // self.block_size), self.block_size, dtype=torch.float32, device=x.device)
         nvfp4sim.nvf4_to_f32(reconstructed_f32, quantized_data, scales)
 
-        # 
 
         reconstructed_f32 = reconstructed_f32.view(m, n)
 

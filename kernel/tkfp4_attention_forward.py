@@ -1,4 +1,5 @@
 from typing import Unpack
+from dataclasses import dataclass
 import math
 
 import torch
@@ -23,6 +24,36 @@ except ImportError:
 
 TESTING = True
 
+# CUDA STATIC PARAMETERS
+TMEM_LANES = 32
+BYTES_PER_LANE = 4
+
+
+class DualQNVFP4AttentionKernelConfig64:
+    Q_TILE_HEIGHT = 128
+    K_TILE_HEIGHT = 64
+    NUM_CONSUMERS = 2
+    NUM_CTA = 2
+
+    Q_SCALE_STAGES_PACKED = 4 # <- This is a factor of 2 lower as we have a NUM_CONSUMERS = 2
+    K_SCALE_STAGES_PACKED = 16
+    Q_SWIZZLE_PER_TILE = 148 * NUM_CONSUMERS # The number of CTA pairs we launch
+    Q_SWIZZLE_GROUP_SIZE = NUM_CONSUMERS # The number of consumers within each CTA
+    K_SWIZZLE_PERT_TILE = 1
+    K_SWIZZLE_GROUP_SIZE = 1
+
+class DualQNVFP4AttentionKernelConfig128:
+    Q_TILE_HEIGHT = 128
+    K_TILE_HEIGHT = 128
+    NUM_CONSUMERS = 2
+    NUM_CTA = 2
+
+    Q_SCALE_STAGES_PACKED = 2 # <- This is a factor of 2 lower as we have a NUM_CONSUMERS = 2
+    K_SCALE_STAGES_PACKED = 8
+    Q_SWIZZLE_PER_TILE = 148 * NUM_CONSUMERS # The number of CTA pairs we launch
+    Q_SWIZZLE_GROUP_SIZE = NUM_CONSUMERS # The number of consumers within each CTA
+    K_SWIZZLE_PERT_TILE = 1
+    K_SWIZZLE_GROUP_SIZE = 1
 
 @torch.no_grad()
 def pack_scales_ue4m3_cuda(
@@ -52,8 +83,17 @@ def pack_scales_ue4m3_cuda(
     ), "INTRA_TILE_HEIGHT_SWIZZLE_FACTOR * tmem_lanes must equal MN_tile_height"
 
     if INTRA_TILE_WIDTH_SWIZZLE_FACTOR > 1:
-        # Tensorcores only support K=64 for MMA's with block size = 16, so it doesn't matter in our case.
-        raise NotImplementedError("INTRA_TILE_WIDTH_SWIZZLE_FACTOR > 1 is not supported for now")
+        # Create each MN_tiles scale data formated so that we follow the correct memory swizzling rules for scales in tmem
+        # We swizzle following: https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-mma-scale-factor-a-layout-4x
+
+        # We also follow scale advancement patterns in: ThunderKittens/include/ops/warp/tensor/mma.cuh
+        scales_per_tile = rearrange(
+            scales_4d,
+            "... (s r tmem_lanes) (p b) -> ... s tmem_lanes (p r b)",
+            r=INTRA_TILE_HEIGHT_SWIZZLE_FACTOR,
+            b=bytes_per_lane,
+            tmem_lanes=tmem_lanes,
+        )
     else:
         # Create each MN_tiles scale data formated so that we follow the correct memory swizzling rules for scales in tmem
         # We swizzle following: https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-mma-scale-factor-a-layout-4x
@@ -78,6 +118,8 @@ def pack_scales_ue4m3_cuda(
     # We choose the format so that each CTA load it's own data (This is important for Q) as each CTA load different blocks of q
     # and thus we need to swizzle scales in order to minimize the number of memory accesses.
 
+    # TODO: Make this smarter to reduce memory usage
+    # Zero pad so that each CTA is given correct data shapes
     seq_dim = scales_per_tile.shape[-3]
     min_seq_dim = stages_packed * tiles_swizzling_factor * swizzle_group_size
     pad_len = (min_seq_dim - (seq_dim % min_seq_dim))
@@ -106,24 +148,12 @@ def tkfp4_attention_forward(
     query_uq: torch.Tensor,  # [b, h, n, d // 2] # unused for now
     key_uq: torch.Tensor,  # [b, h, n, d // 2] # unused for now
     casusal: bool,
-    scaling: float,
     query_scales: torch.Tensor = None,  # torch.float8_e4m3fn # [b, h, n, d // 16]
-    query_scales2: torch.Tensor = None,  # Single float32 value
+    query_scales_gs: torch.Tensor = None,  # torch.float32 # [b, h, n]
     key_scales: torch.Tensor = None,  # torch.float8_e4m3fn # [b, h, n, d // 16]
-    key_scales2: torch.Tensor = None,  # Single float32 value
+    key_scales_gs: torch.Tensor = None,  # torch.float32 # [b, h, n]
     **kwargs: Unpack[TransformersKwargs],
 ):
-    # These are kernel specific meta-parameters
-    Q_TILE_HEIGHT = 128
-    K_TILE_HEIGHT = 64
-    Q_SCALE_STAGES_PACKED = 4 # <- This is a factor of 2 lower as we have a group_size = 2
-    K_SCALE_STAGES_PACKED = 16
-    Q_SWIZZLE_PER_TILE = 148 * 2 # The number of CTA's we launch
-    Q_SWIZZLE_GROUP_SIZE = 2 # The number of consumers within each CTA
-    K_SWIZZLE_PERT_TILE = 1
-    K_SWIZZLE_GROUP_SIZE = 1
-    TMEM_LANES = 32
-    BYTES_PER_LANE = 4
 
     # update as kernel interface changes
     _query = query.contiguous()
@@ -132,26 +162,28 @@ def tkfp4_attention_forward(
 
     b, h, n, d = _query.shape
 
+    assert 2 * d in [64, 128], "ThundreKittens Dual FP4 kernel supports on d=64,128"
+    kernel_config = DualQNVFP4AttentionKernelConfig64() if d == 32 else DualQNVFP4AttentionKernelConfig128()
+
     o = torch.empty((b, h, n, d * 2), dtype=torch.bfloat16, device=query.device)
 
-    import pdb; pdb.set_trace()
 
-
-    padding = (0, 0, 0, (Q_SWIZZLE_GROUP_SIZE * Q_TILE_HEIGHT) - (n % (Q_SWIZZLE_GROUP_SIZE * Q_TILE_HEIGHT)))
+    padding = (0, 0, 0, (kernel_config.Q_SWIZZLE_GROUP_SIZE * kernel_config.Q_TILE_HEIGHT) - (n % (kernel_config.Q_SWIZZLE_GROUP_SIZE * kernel_config.Q_TILE_HEIGHT)))
     query_scales = F.pad(query_scales, pad=padding, mode='constant', value=0) # Zero pad so that we have enough
     query_scales = rearrange(query_scales, "b h n d -> (b h n) d") # We need to pack query values
 
 
     # The function now accepts 4D tensors directly and returns packed 4D tensors
-    packed_query_scales = pack_scales_ue4m3_cuda(query_scales, Q_TILE_HEIGHT, Q_SCALE_STAGES_PACKED, Q_SWIZZLE_PER_TILE, Q_SWIZZLE_GROUP_SIZE, TMEM_LANES, BYTES_PER_LANE)
-    packed_key_scales = pack_scales_ue4m3_cuda(key_scales, K_TILE_HEIGHT, K_SCALE_STAGES_PACKED, K_SWIZZLE_PERT_TILE, K_SWIZZLE_GROUP_SIZE, TMEM_LANES, BYTES_PER_LANE)
+    packed_query_scales = pack_scales_ue4m3_cuda(query_scales, kernel_config.Q_TILE_HEIGHT, kernel_config.Q_SCALE_STAGES_PACKED, kernel_config.Q_SWIZZLE_PER_TILE, kernel_config.Q_SWIZZLE_GROUP_SIZE, TMEM_LANES, BYTES_PER_LANE)
+    packed_key_scales = pack_scales_ue4m3_cuda(key_scales, kernel_config.K_TILE_HEIGHT, kernel_config.K_SCALE_STAGES_PACKED, kernel_config.K_SWIZZLE_PERT_TILE, kernel_config.K_SWIZZLE_GROUP_SIZE, TMEM_LANES, BYTES_PER_LANE)
 
     _packed_query_scales = packed_query_scales.contiguous()
     _packed_key_scales = packed_key_scales.contiguous()
 
-    print(_packed_query_scales.shape)
+    _query_scales_gs = query_scales_gs.contiguous()
+    _key_scales_gs = key_scales_gs.contiguous()
 
-    scaling_factor = 1 / math.sqrt(64) * query_scales2 * key_scales2
+    scaling_factor = 1 / math.sqrt(64)
 
     if casusal:
         raise NotImplementedError("Causal mask not supported for now")
@@ -167,11 +199,13 @@ def tkfp4_attention_forward(
         b200_attn_fp4.fwd_attend_ker_64_noncausal(
             _query,
             _packed_query_scales,
+            _query_scales_gs,
             _key,
             _packed_key_scales,
+            _key_scales_gs,
             _value,
             o,
-            float(scaling_factor.item()),
+            float(scaling_factor),
         )
 
     # no attn_weights returned from kernel

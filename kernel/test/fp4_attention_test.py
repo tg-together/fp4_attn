@@ -5,6 +5,7 @@ import pytest
 import sys
 from pathlib import Path
 from typing import Optional
+from einops import rearrange
 
 # Add parent directory for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -44,28 +45,13 @@ def eager_attention_forward(
     query: torch.Tensor,
     key: torch.Tensor,
     value: torch.Tensor,
-    query_uq: torch.Tensor,
-    key_uq: torch.Tensor,
     attention_mask: Optional[torch.Tensor],
     scaling: float,
-    dropout: float = 0.0,
-    query_scales: torch.Tensor = None,
-    key_scales: torch.Tensor = None,
-    value_scales: torch.Tensor = None,
     **kwargs,
 ):
-    query = query.to(torch.bfloat16)
-    key = key.to(torch.bfloat16)
     value = value.to(torch.bfloat16)
 
     attn_weights = torch.matmul(query, key.transpose(2, 3)) * scaling
-
-    attn_weights_uq = torch.matmul(query_uq, key_uq.transpose(2, 3)) * scaling
-
-    if hasattr(module, 'quantize') and module.fp_mask:
-        full_prec_mask = block_mask_with_first_block(key.shape[-2], 64).unsqueeze(0).unsqueeze(0).to(key.device)   #can change to backward_window_with_first_block or block_mask_with_first_block also
-
-        attn_weights = torch.where(full_prec_mask, attn_weights_uq, attn_weights) 
 
 
     if attention_mask is not None:
@@ -73,15 +59,14 @@ def eager_attention_forward(
         attn_weights = attn_weights + causal_mask
 
 
-    attn_weights = attn_weights.to(torch.float32)
     print(attn_weights[0, 0, :16, :32])
     attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32)
     # attn_weights = nn.functional.dropout(attn_weights, p=module.attention_dropout, training=module.training)
 
-    if hasattr(module, 'quantize_p') and module.quantize_p:
+    # if hasattr(module, 'quantize_p') and module.quantize_p:
 
-        Aq_hi, Aq_lo, Aq_hi_int8, Aq_lo_int8, As_hi, As_lo, As_hi_fp8, As_lo_fp8 = quantize_p(module, attn_weights, module.use_dual_quant_attn)
-        attn_weights = (Aq_hi*As_hi+Aq_lo*As_lo)
+    #     Aq_hi, Aq_lo, Aq_hi_int8, Aq_lo_int8, As_hi, As_lo, As_hi_fp8, As_lo_fp8 = quantize_p(module, attn_weights, module.use_dual_quant_attn)
+    #     attn_weights = (Aq_hi*As_hi+Aq_lo*As_lo)
 
 
     attn_weights = attn_weights.to(torch.bfloat16)
@@ -91,12 +76,12 @@ def eager_attention_forward(
     return attn_output.to(torch.bfloat16), attn_weights.to(torch.bfloat16)
 
 
-def eager_attention(query, key, value, causal=False, scaling=None):
+def eager_attention(query, key, value, query_gs, key_gs, causal=False, scaling=None):
     """Simple wrapper for backward compatibility with smoke tests."""
     _, _, seq_len, head_dim = query.shape
 
     if scaling is None:
-        scaling = 1.0 / (head_dim**0.5)
+        scaling = (query_gs * key_gs) / (head_dim**0.5) 
 
     # Create a simple mock module for the call
     module = MockModule()
@@ -147,7 +132,11 @@ def quantize_to_fp4_with_scales(tensor, quantizer):
     scales = scales.permute(1, 0, 2)  # [heads, seq_len, head_dim // 16]
     scales = scales.unsqueeze(0).expand(batch_size, -1, -1, -1)
 
-    return quantized_data, scales, global_sf
+    # Reshape global scales to [batch, heads, seq_len]
+    global_sf = global_sf.permute(1, 0)
+    global_sf = global_sf.unsqueeze(0).expand(batch_size, -1, -1)
+
+    return reconstructed, quantized_data, scales, global_sf
 
 
 class MockModule:
@@ -175,20 +164,22 @@ def test_attention_fp4(batch_size, seq_len):
     num_heads = 1
     head_dim = 64
     device = "cuda"
-    scaling = 1.0 / (head_dim**0.5)
 
     # Create test tensors
     query_fp32, key_fp32, value_fp32 = create_test_tensors(batch_size, num_heads, seq_len, head_dim, device)
+    value_fp16 = value_fp32.to(dtype=torch.bfloat16)
 
     # Compute reference with eager attention
-    ref_output, ref_weights = eager_attention(query_fp32, key_fp32, value_fp32, causal=False, scaling=scaling)
 
     # Create FP4 quantizer
     quantizer = FP4Quantizer(dequant_dtype=torch.float32, block_size=16, device=torch.device(device))
 
     # Quantize inputs to FP4
-    query_fp4, query_scales, query_scales2 = quantize_to_fp4_with_scales(query_fp32, quantizer)
-    key_fp4, key_scales, key_scales2 = quantize_to_fp4_with_scales(key_fp32, quantizer)
+    query_reconstructd, query_fp4, query_scales, query_scales2 = quantize_to_fp4_with_scales(query_fp32, quantizer)
+    key_reconstructed, key_fp4, key_scales, key_scales2 = quantize_to_fp4_with_scales(key_fp32, quantizer)
+
+    query_reconstructd = rearrange(query_reconstructd, "(b s) h d -> b h s d", b=batch_size, s=seq_len)
+    key_reconstructed = rearrange(key_reconstructed, "(b s) h d -> b h s d", b=batch_size, s=seq_len)
 
     # Create mock module
     module = MockModule()
@@ -202,12 +193,13 @@ def test_attention_fp4(batch_size, seq_len):
         query_uq=None,
         key_uq=None,
         casusal=False,  # Note: typo in original function signature
-        scaling=scaling,
         query_scales=query_scales,
-        query_scales2=query_scales2,
+        query_scales_gs=query_scales2,
         key_scales=key_scales,
-        key_scales2=key_scales2,
+        key_scales_gs=key_scales2,
     )
+
+    ref_output, ref_weights = eager_attention(query_reconstructd, key_reconstructed, value_fp16, query_scales2, key_scales2, causal=False)
 
     print(f"FP4 attention completed successfully")
     print(f"Reference output shape: {ref_output.shape}")
@@ -268,7 +260,6 @@ def test_attention_fp4_causal(batch_size, seq_len):
             query_uq=query_uq,
             key_uq=key_uq,
             casusal=True,  # Note: typo in original function signature
-            scaling=scaling,
             query_scales=query_scales,
             key_scales=key_scales,
         )
