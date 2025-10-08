@@ -447,7 +447,7 @@ def qwen3_fp4_attention_forward(
 ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
 
     
-    
+    self.attention_block_size=int(os.getenv('ATTENTION_BLOCK_SIZE', '256'))
     # Initialize FP4Quantizer if not already present
     if hasattr(qwen3_fp4_attention_forward, 'quantize_enabled') and qwen3_fp4_attention_forward.quantize_enabled and not hasattr(self, 'fp4_quantizer'):
         self.quantize = True
@@ -458,7 +458,6 @@ def qwen3_fp4_attention_forward(
         self.ip = os.getenv('IP', 'true').lower() == 'true'
         self.randomization = os.getenv('RANDOMIZATION', 'hadamarad').lower()
         self.hessians=os.getenv('HESSIANS', 'true').lower() == 'true'
-        self.attention_block_size=int(os.getenv('ATTENTION_BLOCK_SIZE', '256'))
         self.first_block={"K":None, "V":None}
         self.unquantized_cache={"K":None, "V":None}
         

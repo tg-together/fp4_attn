@@ -423,7 +423,7 @@ def flash_style_attention(
                 Aq_hi, Aq_lo, As_hi, As_lo = quantize_p(module, p_norm, module.use_dual_quant_attn)
                 p_quant = (Aq_hi*As_hi+Aq_lo*As_lo)
                 p = p_quant * (torch.sum(p, dim=-1, keepdim=True) + 1e-10)
-                
+
             l   = exp_scale * l   + torch.sum(p, dim=-1, keepdim=True)
             acc = exp_scale * acc + torch.einsum("bhqk,bhkd->bhqd", p, v)
             m = m_new
@@ -447,7 +447,7 @@ def llama_fp4_attention_forward(
 ) -> tuple[torch.Tensor, Optional[torch.Tensor], Optional[tuple[torch.Tensor]]]:
 
     
-    
+    self.attention_block_size=int(os.getenv('ATTENTION_BLOCK_SIZE', '256'))
     # Initialize FP4Quantizer if not already present
     if hasattr(llama_fp4_attention_forward, 'quantize_enabled') and llama_fp4_attention_forward.quantize_enabled and not hasattr(self, 'fp4_quantizer'):
         self.quantize = True
@@ -458,7 +458,6 @@ def llama_fp4_attention_forward(
         self.ip = os.getenv('IP', 'true').lower() == 'true'
         self.randomization = os.getenv('RANDOMIZATION', 'hadamarad').lower()
         self.hessians=os.getenv('HESSIANS', 'true').lower() == 'true'
-        self.attention_block_size=int(os.getenv('ATTENTION_BLOCK_SIZE', '256'))
         self.first_block={"K":None, "V":None}
         self.unquantized_cache={"K":None, "V":None}
         
