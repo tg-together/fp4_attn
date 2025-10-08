@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Select which mode to run: baseline, fp4, or kvquant
-MODE="fp4"  # Options: baseline, fp4, kvquant
+MODE="all"  # Options: baseline, fp4, kvquant
 
 # Task-specific configuration
 TASK="gpqa_diamond_cot_n_shot"

@@ -417,6 +417,12 @@ def flash_style_attention(
             exp_scale = torch.exp(m - m_new)
 
             p = torch.exp(scores - m_new)
+
+            if module.layer_idx != 0 and hasattr(module, 'quantize') and module.quantize == True:
+                p_norm = p / (torch.sum(p, dim=-1, keepdim=True) + 1e-10)
+                Aq_hi, Aq_lo, As_hi, As_lo = quantize_p(module, p_norm, module.use_dual_quant_attn)
+                p_quant = (Aq_hi*As_hi+Aq_lo*As_lo)
+                p = p_quant * (torch.sum(p, dim=-1, keepdim=True) + 1e-10)
             
             l   = exp_scale * l   + torch.sum(p, dim=-1, keepdim=True)
             acc = exp_scale * acc + torch.einsum("bhqk,bhkd->bhqd", p, v)
