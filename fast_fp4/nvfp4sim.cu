@@ -494,6 +494,8 @@ void f32_to_nvf4_nosearch(
     int64_t BLOCKS = N / 2;
     int64_t THREADS = 32;   
 
+    c10::cuda::OptionalCUDAGuard device_guard;
+    device_guard.set_index(Xin.get_device());
 
     auto stream = at::cuda::getCurrentCUDAStream().stream();
 
