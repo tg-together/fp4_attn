@@ -305,7 +305,7 @@ def quantize_p(module, attn_weights, dual=True):
 
         Aq_hi,As_hi = module.fp4_quantizer.single_nvfp4(attn_weights_2d, search=False)
         Aq_hi = Aq_hi.reshape(original_shape)
-        As_hi = As_hi.reshape(*original_shape[:-1],1)
+        As_hi = torch.ones_like(Aq_hi)
         Aq_lo = torch.zeros_like(Aq_hi)
         As_lo = torch.zeros_like(As_hi)
 
@@ -386,7 +386,7 @@ def flash_style_attention(
             k=k_blk
             v=v_blk
 
-            if module.layer_idx != 0 and hasattr(module, 'quantize') and module.quantize:
+            if module.layer_idx != 0 and hasattr(module, 'quantize') and module.quantize and module.fp_mask:
 
                 if module.mode=="prefill" and (k_block_idx==0 or k_block_idx==q_block_idx):
                     k=k_blk_uq
@@ -456,7 +456,7 @@ def llama_fp4_attention_forward(
         self.use_dual_quant_attn = os.getenv('FP4_USE_DUAL_QUANT_ATTN', 'true').lower() == 'true'
         self.fp_mask = os.getenv('FP_MASK', 'true').lower() == 'true'
         self.ip = os.getenv('IP', 'true').lower() == 'true'
-        self.randomization = os.getenv('RANDOMIZATION', 'hadamarad').lower()
+        self.randomization = os.getenv('RANDOMIZATION', 'ortho').lower()
         self.hessians=os.getenv('HESSIANS', 'true').lower() == 'true'
         self.first_block={"K":None, "V":None}
         self.unquantized_cache={"K":None, "V":None}
