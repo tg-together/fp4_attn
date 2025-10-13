@@ -433,7 +433,7 @@ def flash_style_attention(
         out[:, :, q_start:q_end, :] = (acc / l).to(q.dtype)
         del q_blk, m, l, acc
 
-    return out.transpose(1, 2).contiguous().to(q.dtype),None
+    return out.transpose(1, 2).contiguous().to(q_q.dtype),None
 
 
 def qwen3_fp4_attention_forward(

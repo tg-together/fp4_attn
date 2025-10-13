@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Select which mode to run: baseline, fp4, or kvquant
-MODE="all"  # Options: baseline, fp4, kvquant, all
+MODE="baseline"  # Options: baseline, fp4, kvquant, all
 
 export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 export HF_HOME="/scratch/huggingface"
