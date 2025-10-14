@@ -613,5 +613,5 @@ def llama_fp4_attention_forward(
         attn_output = attn_output.to(self.dequant_dtype)
 
     attn_output = attn_output.reshape(*input_shape, -1).contiguous()
-    attn_output = self.o_proj(attn_output)
+    attn_output = self.o_proj(attn_output.to(self.o_proj.weight.dtype))
     return attn_output, attn_weights
