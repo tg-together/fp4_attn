@@ -123,7 +123,7 @@ class FP4Quantizer(nn.Module):
         if self.global_sf_max is not None:
             return reconstructed_f32, global_sf
         else:
-            return reconstructed_f32, torch.ones(*([1] * reconstructed_f32.ndim),device=reconstructed_f32.device)
+            return reconstructed_f32, torch.ones_like(reconstructed_f32)
 
 
 

@@ -305,7 +305,7 @@ def quantize_p(module, attn_weights, dual=True):
 
         Aq_hi,As_hi = module.fp4_quantizer.single_nvfp4(attn_weights_2d, search=False)
         Aq_hi = Aq_hi.reshape(original_shape)
-        As_hi = torch.ones_like(Aq_hi)
+        As_hi = As_hi.reshape(*original_shape[:-1],1)
         Aq_lo = torch.zeros_like(Aq_hi)
         As_lo = torch.zeros_like(As_hi)
 

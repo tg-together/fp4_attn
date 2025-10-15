@@ -305,7 +305,7 @@ def quantize_p(module, attn_weights, dual=True):
 
         Aq_hi,As_hi = module.fp4_quantizer.single_nvfp4(attn_weights_2d, search=False)
         Aq_hi = Aq_hi.reshape(original_shape)
-        As_hi = torch.ones_like(Aq_hi)
+        As_hi = As_hi.reshape(*original_shape[:-1],1)
         Aq_lo = torch.zeros_like(Aq_hi)
         As_lo = torch.zeros_like(As_hi)
 
@@ -418,11 +418,11 @@ def flash_style_attention(
 
             p = torch.exp(scores - m_new)
 
-            if module.layer_idx != 0 and hasattr(module, 'quantize') and module.quantize == True:
-                p_norm = p / (torch.sum(p, dim=-1, keepdim=True) + 1e-10)
-                Aq_hi, Aq_lo, As_hi, As_lo = quantize_p(module, p_norm, module.use_dual_quant_attn)
-                p_quant = (Aq_hi*As_hi+Aq_lo*As_lo)
-                p = p_quant * (torch.sum(p, dim=-1, keepdim=True) + 1e-10)
+            # if module.layer_idx != 0 and hasattr(module, 'quantize') and module.quantize == True:
+            #     p_norm = p / (torch.sum(p, dim=-1, keepdim=True) + 1e-10)
+            #     Aq_hi, Aq_lo, As_hi, As_lo = quantize_p(module, p_norm, module.use_dual_quant_attn)
+            #     p_quant = (Aq_hi*As_hi+Aq_lo*As_lo)
+            #     p = p_quant * (torch.sum(p, dim=-1, keepdim=True) + 1e-10)
 
             l   = exp_scale * l   + torch.sum(p, dim=-1, keepdim=True)
             acc = exp_scale * acc + torch.einsum("bhqk,bhkd->bhqd", p, v)
