@@ -8,7 +8,7 @@ TASK="gsm8k_cot"
 NUM_FEWSHOT="8"
 
 # Common suffix for all commands
-SUFFIX_CMD="--apply_chat_template --num_fewshot ${NUM_FEWSHOT} --fewshot_as_multiturn --log_samples"
+SUFFIX_CMD="--num_fewshot ${NUM_FEWSHOT} --log_samples"
 
 export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 export HF_HOME="/scratch/huggingface"
@@ -23,7 +23,7 @@ if [ "$MODE" = "baseline" ]; then
     # Run non-70B models sequentially for baseline on single GPU
     (
         MODEL="meta-llama/Llama-3.2-3B-Instruct"
-        CUDA_VISIBLE_DEVICES=0  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --output "./logs/gsm8k_benchmark/baseline/${MODEL##*/}_gsm8k.jsonl" --task gsm8k_cot_llama > "logs/gsm8k_benchmark/baseline/${MODEL##*/}_gsm8k.txt" 2>&1
+        CUDA_VISIBLE_DEVICES=0  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --output "./logs/gsm8k_benchmark/baseline/${MODEL##*/}_gsm8k.jsonl" --task gsm8k_cot_llama --apply_chat_template  --fewshot_as_multiturn > "logs/gsm8k_benchmark/baseline/${MODEL##*/}_gsm8k.txt" 2>&1
         
         MODEL="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
         CUDA_VISIBLE_DEVICES=0  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --output "./logs/gsm8k_benchmark/baseline/${MODEL##*/}_gsm8k.jsonl" --task gsm8k_cot > "logs/gsm8k_benchmark/baseline/${MODEL##*/}_gsm8k.txt" 2>&1
@@ -34,7 +34,7 @@ if [ "$MODE" = "baseline" ]; then
     
     # Run 70B model for baseline on 2 GPUs
     MODEL="meta-llama/Llama-3.3-70B-Instruct"
-    CUDA_VISIBLE_DEVICES=1,2  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --output "./logs/gsm8k_benchmark/baseline/${MODEL##*/}_gsm8k.jsonl" --task gsm8k_cot_llama > "logs/gsm8k_benchmark/baseline/${MODEL##*/}_gsm8k.txt" 2>&1 &
+    CUDA_VISIBLE_DEVICES=1,2  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --output "./logs/gsm8k_benchmark/baseline/${MODEL##*/}_gsm8k.jsonl" --task gsm8k_cot_llama --apply_chat_template  --fewshot_as_multiturn > "logs/gsm8k_benchmark/baseline/${MODEL##*/}_gsm8k.txt" 2>&1 &
 
 elif [ "$MODE" = "all" ]; then
     mkdir -p "logs/gsm8k_benchmark/baseline/"
@@ -45,7 +45,7 @@ elif [ "$MODE" = "all" ]; then
     (
         # Baseline non-70B models
         MODEL="meta-llama/Llama-3.2-3B-Instruct"
-        CUDA_VISIBLE_DEVICES=1  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --output "./logs/gsm8k_benchmark/baseline/${MODEL##*/}_gsm8k.jsonl" --task gsm8k_cot_llama > "logs/gsm8k_benchmark/baseline/${MODEL##*/}_gsm8k.txt" 2>&1
+        CUDA_VISIBLE_DEVICES=1  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --output "./logs/gsm8k_benchmark/baseline/${MODEL##*/}_gsm8k.jsonl" --task gsm8k_cot_llama --apply_chat_template  --fewshot_as_multiturn > "logs/gsm8k_benchmark/baseline/${MODEL##*/}_gsm8k.txt" 2>&1
         
         MODEL="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
         CUDA_VISIBLE_DEVICES=1  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --output "./logs/gsm8k_benchmark/baseline/${MODEL##*/}_gsm8k.jsonl" --task gsm8k_cot > "logs/gsm8k_benchmark/baseline/${MODEL##*/}_gsm8k.txt" 2>&1
@@ -55,7 +55,7 @@ elif [ "$MODE" = "all" ]; then
         
         # KVquant non-70B models
         MODEL="meta-llama/Llama-3.2-3B-Instruct"
-        CUDA_VISIBLE_DEVICES=0  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --kvquant --output "./logs/gsm8k_benchmark/kvquant/${MODEL##*/}_gsm8k.jsonl" --task gsm8k_cot_llama > "logs/gsm8k_benchmark/kvquant/${MODEL##*/}_gsm8k.txt" 2>&1
+        CUDA_VISIBLE_DEVICES=0  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --kvquant --output "./logs/gsm8k_benchmark/kvquant/${MODEL##*/}_gsm8k.jsonl" --task gsm8k_cot_llama --apply_chat_template  --fewshot_as_multiturn > "logs/gsm8k_benchmark/kvquant/${MODEL##*/}_gsm8k.txt" 2>&1
         
         MODEL="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
         CUDA_VISIBLE_DEVICES=0  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --kvquant --output "./logs/gsm8k_benchmark/kvquant/${MODEL##*/}_gsm8k.jsonl" --task gsm8k_cot > "logs/gsm8k_benchmark/kvquant/${MODEL##*/}_gsm8k.txt" 2>&1
@@ -69,20 +69,20 @@ elif [ "$MODE" = "all" ]; then
     (
         # Baseline 70B model
         MODEL="meta-llama/Llama-3.3-70B-Instruct"
-        CUDA_VISIBLE_DEVICES=1,2  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --output "./logs/gsm8k_benchmark/baseline/${MODEL##*/}_gsm8k.jsonl" --task gsm8k_cot_llama > "logs/gsm8k_benchmark/baseline/${MODEL##*/}_gsm8k.txt" 2>&1
+        CUDA_VISIBLE_DEVICES=1,2  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --output "./logs/gsm8k_benchmark/baseline/${MODEL##*/}_gsm8k.jsonl" --task gsm8k_cot_llama --apply_chat_template  --fewshot_as_multiturn > "logs/gsm8k_benchmark/baseline/${MODEL##*/}_gsm8k.txt" 2>&1
         
         # KVquant 70B model
         MODEL="meta-llama/Llama-3.3-70B-Instruct"
-        CUDA_VISIBLE_DEVICES=1,2  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --kvquant --output "./logs/gsm8k_benchmark/kvquant/${MODEL##*/}_gsm8k.jsonl" --task gsm8k_cot_llama > "logs/gsm8k_benchmark/kvquant/${MODEL##*/}_gsm8k.txt" 2>&1
+        CUDA_VISIBLE_DEVICES=1,2  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --kvquant --output "./logs/gsm8k_benchmark/kvquant/${MODEL##*/}_gsm8k.jsonl" --task gsm8k_cot_llama --apply_chat_template  --fewshot_as_multiturn > "logs/gsm8k_benchmark/kvquant/${MODEL##*/}_gsm8k.txt" 2>&1
     ) &
     
     # FP4 70B model on 2 GPUs
     MODEL="meta-llama/Llama-3.3-70B-Instruct"
-    CUDA_VISIBLE_DEVICES=3,4  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --quantize --output "./logs/gsm8k_benchmark/fp4/${MODEL##*/}_gsm8k.jsonl" --task gsm8k_cot_llama > "logs/gsm8k_benchmark/fp4/${MODEL##*/}_gsm8k.txt" 2>&1 &
+    CUDA_VISIBLE_DEVICES=3,4  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --quantize --output "./logs/gsm8k_benchmark/fp4/${MODEL##*/}_gsm8k.jsonl" --task gsm8k_cot_llama --apply_chat_template  --fewshot_as_multiturn > "logs/gsm8k_benchmark/fp4/${MODEL##*/}_gsm8k.txt" 2>&1 &
     
     # FP4 non-70B models on 3 different GPUs
     MODEL="meta-llama/Llama-3.2-3B-Instruct"
-    CUDA_VISIBLE_DEVICES=5  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --quantize --output "./logs/gsm8k_benchmark/fp4/${MODEL##*/}_gsm8k.jsonl" --task gsm8k_cot_llama > "logs/gsm8k_benchmark/fp4/${MODEL##*/}_gsm8k.txt" 2>&1 &
+    CUDA_VISIBLE_DEVICES=5  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --quantize --output "./logs/gsm8k_benchmark/fp4/${MODEL##*/}_gsm8k.jsonl" --task gsm8k_cot_llama --apply_chat_template  --fewshot_as_multiturn > "logs/gsm8k_benchmark/fp4/${MODEL##*/}_gsm8k.txt" 2>&1 &
     
     MODEL="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
     CUDA_VISIBLE_DEVICES=6  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --quantize --output "./logs/gsm8k_benchmark/fp4/${MODEL##*/}_gsm8k.jsonl" --task gsm8k_cot > "logs/gsm8k_benchmark/fp4/${MODEL##*/}_gsm8k.txt" 2>&1 &
@@ -97,11 +97,11 @@ elif [ "$MODE" = "fp4" ]; then
     
     # FP4 70B model on 2 GPUs
     MODEL="meta-llama/Llama-3.3-70B-Instruct"
-    CUDA_VISIBLE_DEVICES=3,4  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --quantize --output "./logs/gsm8k_benchmark/fp4/${MODEL##*/}_gsm8k.jsonl" --task gsm8k_cot_llama > "logs/gsm8k_benchmark/fp4/${MODEL##*/}_gsm8k.txt" 2>&1 &
+    CUDA_VISIBLE_DEVICES=3,4  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --quantize --output "./logs/gsm8k_benchmark/fp4/${MODEL##*/}_gsm8k.jsonl" --task gsm8k_cot_llama --apply_chat_template  --fewshot_as_multiturn > "logs/gsm8k_benchmark/fp4/${MODEL##*/}_gsm8k.txt" 2>&1 &
     
     # FP4 non-70B models on 3 different GPUs
     MODEL="meta-llama/Llama-3.2-3B-Instruct"
-    CUDA_VISIBLE_DEVICES=5  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --quantize --output "./logs/gsm8k_benchmark/fp4/${MODEL##*/}_gsm8k.jsonl" --task gsm8k_cot_llama > "logs/gsm8k_benchmark/fp4/${MODEL##*/}_gsm8k.txt" 2>&1 &
+    CUDA_VISIBLE_DEVICES=5  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --quantize --output "./logs/gsm8k_benchmark/fp4/${MODEL##*/}_gsm8k.jsonl" --task gsm8k_cot_llama --apply_chat_template  --fewshot_as_multiturn > "logs/gsm8k_benchmark/fp4/${MODEL##*/}_gsm8k.txt" 2>&1 &
     
     MODEL="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
     CUDA_VISIBLE_DEVICES=6  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --quantize --output "./logs/gsm8k_benchmark/fp4/${MODEL##*/}_gsm8k.jsonl" --task gsm8k_cot > "logs/gsm8k_benchmark/fp4/${MODEL##*/}_gsm8k.txt" 2>&1 &
@@ -117,7 +117,7 @@ elif [ "$MODE" = "kvquant" ]; then
     # Run non-70B models sequentially on single GPU
     (
         MODEL="meta-llama/Llama-3.2-3B-Instruct"
-        CUDA_VISIBLE_DEVICES=0  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --kvquant --output "./logs/gsm8k_benchmark/kvquant/${MODEL##*/}_gsm8k.jsonl" --task gsm8k_cot_llama > "logs/gsm8k_benchmark/kvquant/${MODEL##*/}_gsm8k.txt" 2>&1
+        CUDA_VISIBLE_DEVICES=0  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --kvquant --output "./logs/gsm8k_benchmark/kvquant/${MODEL##*/}_gsm8k.jsonl" --task gsm8k_cot_llama --apply_chat_template  --fewshot_as_multiturn > "logs/gsm8k_benchmark/kvquant/${MODEL##*/}_gsm8k.txt" 2>&1
         
         MODEL="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
         CUDA_VISIBLE_DEVICES=0  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --kvquant --output "./logs/gsm8k_benchmark/kvquant/${MODEL##*/}_gsm8k.jsonl" --task gsm8k_cot > "logs/gsm8k_benchmark/kvquant/${MODEL##*/}_gsm8k.txt" 2>&1
@@ -128,7 +128,7 @@ elif [ "$MODE" = "kvquant" ]; then
     
     # Run 70B model on 2 GPUs
     MODEL="meta-llama/Llama-3.3-70B-Instruct"
-    CUDA_VISIBLE_DEVICES=1,2  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --kvquant --output "./logs/gsm8k_benchmark/kvquant/${MODEL##*/}_gsm8k.jsonl" --task gsm8k_cot_llama > "logs/gsm8k_benchmark/kvquant/${MODEL##*/}_gsm8k.txt" 2>&1 &
+    CUDA_VISIBLE_DEVICES=1,2  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --kvquant --output "./logs/gsm8k_benchmark/kvquant/${MODEL##*/}_gsm8k.jsonl" --task gsm8k_cot_llama --apply_chat_template  --fewshot_as_multiturn > "logs/gsm8k_benchmark/kvquant/${MODEL##*/}_gsm8k.txt" 2>&1 &
 
 fi
 
