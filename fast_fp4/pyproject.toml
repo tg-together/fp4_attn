@@ -1,0 +1,7 @@
+[build-system]
+requires = ["setuptools>=64", "wheel", "torch", "ninja"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nvfp4sim"
+version = "0.0.0"
