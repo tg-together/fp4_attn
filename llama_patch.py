@@ -295,19 +295,18 @@ def quantize_p(module, attn_weights, dual=True):
     if dual:
         Aq_hi, Aq_lo, As_hi, As_lo = module.fp4_quantizer.dual_nvfp4(attn_weights_2d, search=False)
 
-        Aq_hi = Aq_hi.reshape(original_shape)
-        Aq_lo = Aq_lo.reshape(original_shape)
-        As_hi = As_hi.reshape(*original_shape[:-1],1)
-        As_lo = As_lo.reshape(*original_shape[:-1],1)
-
-
     else:
 
         Aq_hi,As_hi = module.fp4_quantizer.single_nvfp4(attn_weights_2d, search=False)
-        Aq_hi = Aq_hi.reshape(original_shape)
-        As_hi = As_hi.reshape(*original_shape[:-1],1)
         Aq_lo = torch.zeros_like(Aq_hi)
         As_lo = torch.zeros_like(As_hi)
+
+        Aq_hi = Aq_hi.reshape(original_shape)
+        Aq_lo = Aq_lo.reshape(original_shape)
+
+        if module.fp4_quantizer.global_sf_max is not None:
+            As_hi = As_hi.reshape(*original_shape[:-1],1)
+            As_lo = As_lo.reshape(*original_shape[:-1],1)
 
     return Aq_hi, Aq_lo, As_hi, As_lo
 
