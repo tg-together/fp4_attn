@@ -87,13 +87,14 @@ def store_weight_gradients(module, layer_idx):
     running_averages['counts'][layer_idx] += 1
 
 
-def quantize_weight(weight, fp4_quantizer, dual=False):
-    """Quantize a weight tensor using FP4 quantization.
+def quantize_weight(weight, fp4_quantizer, dual=False, precision="fp4"):
+    """Quantize a weight tensor using FP4 or FP8 quantization.
     
     Args:
         weight: Weight tensor of shape [out_features, in_features]
-        fp4_quantizer: FP4Quantizer instance
-        dual: Whether to use dual quantization
+        fp4_quantizer: FP4Quantizer instance (used for both FP4 and FP8)
+        dual: Whether to use dual quantization (only for FP4)
+        precision: "fp4" or "fp8" quantization precision
     
     Returns:
         Tuple of (quantized_weight, scales)
@@ -103,33 +104,76 @@ def quantize_weight(weight, fp4_quantizer, dual=False):
     # Reshape to 2D if needed for quantization
     weight_2d = weight.view(-1, original_shape[-1])
     
-    if dual:
-        Wq_hi, Wq_lo, Ws_hi, Ws_lo = fp4_quantizer.dual_nvfp4(weight_2d, search=True)
-        quantized_weight = (Wq_hi * Ws_hi + Wq_lo * Ws_lo).view(original_shape)
-        scales = (Ws_hi, Ws_lo)
+    if precision == "fp8":
+        # FP8 quantization - more strict baseline than FP4
+        # Use PyTorch's built-in FP8 support or simulate with scaled quantization
+        quantized_weight, scales = _quantize_fp8(weight_2d, original_shape)
+        print("FP8 quantization!")
+        
+    elif precision == "fp4":
+        if dual:
+            Wq_hi, Wq_lo, Ws_hi, Ws_lo = fp4_quantizer.dual_nvfp4(weight_2d, search=True)
+            quantized_weight = (Wq_hi * Ws_hi + Wq_lo * Ws_lo).view(original_shape)
+            scales = (Ws_hi, Ws_lo)
+            print("dual FP4!")
+        else:
+            Wq, Ws = fp4_quantizer.single_nvfp4(weight_2d, search=True)
+            quantized_weight = (Wq * Ws).view(original_shape)
+            scales = Ws
+            print("single FP4!")
     else:
-        Wq, Ws = fp4_quantizer.single_nvfp4(weight_2d, search=True)
-        quantized_weight = (Wq * Ws).view(original_shape)
-        scales = Ws
+        raise ValueError(f"Unsupported precision: {precision}. Use 'fp4' or 'fp8'")
     
     return quantized_weight, scales
 
 
-def create_quantized_linear(original_linear, fp4_quantizer, dual=False):
+def _quantize_fp8(weight_2d, original_shape):
+    """FP8 quantization implementation.
+    
+    Uses E4M3 format which is commonly used for weights.
+    """
+    # FP8 E4M3 has range [-448, 448] approximately
+    fp8_max = 448.0
+    
+    # Compute per-channel scales (more accurate than per-tensor)
+    abs_max = torch.max(torch.abs(weight_2d), dim=1, keepdim=True)[0]
+    scales = abs_max / fp8_max
+    scales = torch.clamp(scales, min=1e-8)  # Avoid division by zero
+    
+    # Quantize to FP8 E4M3 range
+    weight_scaled = weight_2d / scales
+    
+    # Simulate FP8 E4M3 quantization (PyTorch doesn't have native FP8 yet)
+    # Clamp to FP8 range and add small noise to simulate quantization
+    weight_fp8 = torch.clamp(weight_scaled, min=-fp8_max, max=fp8_max)
+    
+    # Simulate limited precision by rounding to fewer mantissa bits
+    # FP8 E4M3 has 3 mantissa bits vs FP32's 23 bits
+    scale_factor = 2**3  # 3 mantissa bits = 8 levels
+    weight_fp8 = torch.round(weight_fp8 * scale_factor) / scale_factor
+    
+    # Dequantize back to full precision
+    quantized_weight = (weight_fp8 * scales).view(original_shape)
+    
+    return quantized_weight, scales
+
+
+def create_quantized_linear(original_linear, fp4_quantizer, dual=False, precision="fp4"):
     """Create a quantized version of a linear layer."""
     
     class QuantizedLinear(nn.Module):
-        def __init__(self, original_linear, fp4_quantizer, dual=False):
+        def __init__(self, original_linear, fp4_quantizer, dual=False, precision="fp4"):
             super().__init__()
             self.in_features = original_linear.in_features
             self.out_features = original_linear.out_features
             self.dual = dual
+            self.precision = precision
             self.fp4_quantizer = fp4_quantizer
             
             # Quantize the weights
             with torch.no_grad():
                 self.quantized_weight, self.scales = quantize_weight(
-                    original_linear.weight.data, fp4_quantizer, dual
+                    original_linear.weight.data, fp4_quantizer, dual, precision
                 )
             
             # Keep bias if present
@@ -149,15 +193,15 @@ def create_quantized_linear(original_linear, fp4_quantizer, dual=False):
             """Return dequantized weights for analysis."""
             return self.quantized_weight
     
-    return QuantizedLinear(original_linear, fp4_quantizer, dual)
+    return QuantizedLinear(original_linear, fp4_quantizer, dual, precision)
 
 
-def apply_weight_quantization(module, use_dual_weight_quant=False):
+def apply_weight_quantization(module, use_dual_weight_quant=False, precision="fp4"):
     """Apply weight quantization to attention module projections."""
     if not hasattr(module, 'weight_quantized'):
-        print(f"Applying weight quantization to layer {module.layer_idx}")
+        print(f"Applying {precision.upper()} weight quantization to layer {module.layer_idx}")
         
-        # Initialize FP4 quantizer for weights
+        # Initialize quantizer for weights (FP4Quantizer works for both FP4 and FP8)
         weight_quantizer = FP4Quantizer(
             global_sf_max=None,  # Let each weight matrix find its own scale
             device=module.q_proj.weight.device
@@ -165,16 +209,16 @@ def apply_weight_quantization(module, use_dual_weight_quant=False):
         
         # Quantize projection weights
         module.q_proj_quantized = create_quantized_linear(
-            module.q_proj, weight_quantizer, dual=use_dual_weight_quant
+            module.q_proj, weight_quantizer, dual=use_dual_weight_quant, precision=precision
         )
         module.k_proj_quantized = create_quantized_linear(
-            module.k_proj, weight_quantizer, dual=use_dual_weight_quant
+            module.k_proj, weight_quantizer, dual=use_dual_weight_quant, precision=precision
         )
         module.v_proj_quantized = create_quantized_linear(
-            module.v_proj, weight_quantizer, dual=use_dual_weight_quant
+            module.v_proj, weight_quantizer, dual=use_dual_weight_quant, precision=precision
         )
         module.o_proj_quantized = create_quantized_linear(
-            module.o_proj, weight_quantizer, dual=use_dual_weight_quant
+            module.o_proj, weight_quantizer, dual=use_dual_weight_quant, precision=precision
         )
         
         module.weight_quantized = True
@@ -202,12 +246,14 @@ def qwen3_weight_quantized_attention_forward(
         
         self.quantize = True
         self.use_dual_weight_quant = os.getenv('FP4_USE_DUAL_WEIGHT_QUANT', 'true').lower() == 'true'
+        self.weight_precision = os.getenv('WEIGHT_PRECISION', 'fp4').lower()  # fp4 or fp8
+        print ("check, self.weight_precision", self.weight_precision)
         self.weight_quant_log = False
         
         # Apply weight quantization
-        apply_weight_quantization(self, self.use_dual_weight_quant)
+        apply_weight_quantization(self, self.use_dual_weight_quant, self.weight_precision)
         
-        print(f"Weight quantization enabled: dual={self.use_dual_weight_quant}")
+        print(f"Weight quantization enabled: precision={self.weight_precision}, dual={self.use_dual_weight_quant}")
     
     input_shape = hidden_states.shape[:-1]
     hidden_shape = (*input_shape, -1, self.head_dim)
@@ -264,6 +310,7 @@ def qwen3_weight_quantized_attention_forward(
     # Use quantized output projection if available
     if hasattr(self, 'weight_quantized') and self.weight_quantized:
         attn_output = self.o_proj_quantized(attn_output)
+        # print ("checking weight quantized output projection!!!")
     else:
         attn_output = self.o_proj(attn_output)
         
