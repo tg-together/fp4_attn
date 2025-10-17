@@ -1,5 +1,5 @@
 export HF_HOME=/scratch/huggingface
-export HF_TOKEN=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
+export HF_TOKEN=XXX
 
 export HF_HOME_DATASETS=/scratch/huggingface/datasets
 
