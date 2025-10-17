@@ -1,0 +1,37 @@
+{
+    "generated_at": "2025-10-17T01:31:52.332146-05:00",
+    "num_repeats": 3,
+    "model_configs": {
+        "ModelArch": "Qwen3ForCausalLM",
+        "ModelPath": "Qwen/Qwen3-4B-Thinking-2507"
+    },
+    "task": "gpqa_diamond_cot_n_shot",
+    "statistics": {
+        "exact_match,strict-match": {
+            "values": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "mean": 0.0,
+            "std": 0.0,
+            "variance": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "median": 0.0
+        },
+        "exact_match,flexible-extract": {
+            "values": [
+                0.0,
+                0.0,
+                0.3333333333333333
+            ],
+            "mean": 0.1111111111111111,
+            "std": 0.15713484026367722,
+            "variance": 0.024691358024691357,
+            "min": 0.0,
+            "max": 0.3333333333333333,
+            "median": 0.0
+        }
+    }
+}

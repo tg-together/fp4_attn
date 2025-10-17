@@ -1,0 +1,33 @@
+{
+    "generated_at": "2025-10-17T00:43:36.090096-05:00",
+    "num_repeats": 1,
+    "model_configs": {
+        "ModelArch": "Qwen3ForCausalLM",
+        "ModelPath": "Qwen/Qwen3-4B-Thinking-2507"
+    },
+    "task": "gsm8k_cot",
+    "statistics": {
+        "exact_match,strict-match": {
+            "values": [
+                0.6666666666666666
+            ],
+            "mean": 0.6666666666666666,
+            "std": 0.0,
+            "variance": 0.0,
+            "min": 0.6666666666666666,
+            "max": 0.6666666666666666,
+            "median": 0.6666666666666666
+        },
+        "exact_match,flexible-extract": {
+            "values": [
+                0.0
+            ],
+            "mean": 0.0,
+            "std": 0.0,
+            "variance": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "median": 0.0
+        }
+    }
+}
