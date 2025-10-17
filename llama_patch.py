@@ -201,9 +201,9 @@ def quantize_q(module, q_orig, dual=True):
     q_=q_.reshape(B * T, H_q, D)
 
     if dual:
-        Qq_hi, Qq_lo, Qs_hi, Qs_lo = module.fp4_quantizer.dual_nvfp4(q_, search=True)
+        Qq_hi, Qq_lo, Qs_hi, Qs_lo = module.fp4_quantizer.dual_nvfp4(q_, search=False)
     else:
-        Qq_hi, Qs_hi = module.fp4_quantizer.single_nvfp4(q_, search=True)
+        Qq_hi, Qs_hi = module.fp4_quantizer.single_nvfp4(q_, search=False)
         Qq_lo = torch.zeros_like(Qq_hi)
         Qs_lo = torch.zeros_like(Qs_hi)
 
@@ -456,7 +456,7 @@ def llama_fp4_attention_forward(
             global hessian_folder
             qk_hessian_file = f"{hessian_folder}/mag_reduce.pt"
             if os.path.exists(qk_hessian_file):
-                self.qk_hessians=torch.load(qk_hessian_file)
+                self.mag_reduce=torch.load(qk_hessian_file)
             else:
                 raise ValueError(f"QK Hessian file not found: {qk_hessian_file}")
     

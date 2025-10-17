@@ -142,7 +142,7 @@ def get_R(QH,KH):
 
     return R, invR
 
-def incoherence_processing(self, Q,K, QH, KH):
+def incoherence_processing(self, Q,K, R, invR):
 
     B, H_q, T, D = Q.shape
     B, H_k, T, D = K.shape
@@ -153,16 +153,6 @@ def incoherence_processing(self, Q,K, QH, KH):
         M=torch.tensor(ortho_group.rvs(dim=D), dtype=torch.float32).to(Q.device)
 
     if self.hessians:
-        reg_scale=1e-2
-
-        QH.div_(QH.diagonal(dim1=-2, dim2=-1).mean(dim=-1).unsqueeze(-1).unsqueeze(-1))
-
-        QH.diagonal(dim1=-2, dim2=-1).add_(reg_scale)
-
-        KH.div_(KH.diagonal(dim1=-2, dim2=-1).mean(dim=-1).unsqueeze(-1).unsqueeze(-1))
-        KH.diagonal(dim1=-2, dim2=-1).add_(reg_scale)
-
-        R, invR=get_R(QH,KH)
 
         invR=invR.repeat_interleave(dim=0, repeats=H_q//H_k)
 
@@ -211,9 +201,9 @@ def quantize_q(module, q_orig, dual=True):
     q_=q_.reshape(B * T, H_q, D)
 
     if dual:
-        Qq_hi, Qq_lo, Qs_hi, Qs_lo = module.fp4_quantizer.dual_nvfp4(q_, search=True)
+        Qq_hi, Qq_lo, Qs_hi, Qs_lo = module.fp4_quantizer.dual_nvfp4(q_, search=False)
     else:
-        Qq_hi, Qs_hi = module.fp4_quantizer.single_nvfp4(q_, search=True)
+        Qq_hi, Qs_hi = module.fp4_quantizer.single_nvfp4(q_, search=False)
         Qq_lo = torch.zeros_like(Qq_hi)
         Qs_lo = torch.zeros_like(Qs_hi)
 
@@ -452,10 +442,10 @@ def qwen3_fp4_attention_forward(
         self.quantize = True
         self.dequant_dtype = self.q_proj.weight.dtype
         self.use_dual_quant_q = os.getenv('FP4_USE_DUAL_QUANT_Q', 'true').lower() == 'true'
-        self.use_dual_quant_attn = os.getenv('FP4_USE_DUAL_QUANT_ATTN', 'true').lower() == 'true'
+        self.use_dual_quant_attn = os.getenv('FP4_USE_DUAL_QUANT_ATTN', 'false').lower() == 'true'
         self.fp_mask = os.getenv('FP_MASK', 'true').lower() == 'true'
         self.ip = os.getenv('IP', 'true').lower() == 'true'
-        self.randomization = os.getenv('RANDOMIZATION', 'ortho').lower()
+        self.randomization = os.getenv('RANDOMIZATION', 'hadamard').lower()
         self.hessians=os.getenv('HESSIANS', 'true').lower() == 'true'
         self.first_block={"K":None, "V":None}
         self.unquantized_cache={"K":None, "V":None}
@@ -464,9 +454,9 @@ def qwen3_fp4_attention_forward(
         # Load from the correct folder based on hessian_folder
         if self.hessians:
             global hessian_folder
-            qk_hessian_file = f"{hessian_folder}/qk_hessians.pt"
+            qk_hessian_file = f"{hessian_folder}/mag_reduce.pt"
             if os.path.exists(qk_hessian_file):
-                self.qk_hessians=torch.load(qk_hessian_file)
+                self.mag_reduce=torch.load(qk_hessian_file)
             else:
                 raise ValueError(f"QK Hessian file not found: {qk_hessian_file}")
     
@@ -508,12 +498,12 @@ def qwen3_fp4_attention_forward(
     if self.layer_idx != 0 and hasattr(self, 'quantize') and self.quantize:
 
         if self.ip:
-            q_hessian=None
-            k_hessian=None
+            R=None
+            invR=None
             if self.hessians:
-                q_hessian=self.qk_hessians[f'layer_{self.layer_idx}']['q_hessian'].to(query_states.device).to(torch.float32)
-                k_hessian=self.qk_hessians[f'layer_{self.layer_idx}']['k_hessian'].to(key_states.device).to(torch.float32)
-            query_states, key_states = incoherence_processing(self, query_states.to(torch.float32), key_states.to(torch.float32), q_hessian, k_hessian)
+                R=self.mag_reduce[f'layer_{self.layer_idx}']['R'].to(query_states.device).to(torch.float32)
+                invR=self.mag_reduce[f'layer_{self.layer_idx}']['invR'].to(key_states.device).to(torch.float32)
+            query_states, key_states = incoherence_processing(self, query_states.to(torch.float32), key_states.to(torch.float32), R, invR)
 
         value_states = value_states.to(torch.float32)
         query_states_uq, key_states_uq , value_states_uq = query_states, key_states, value_states
