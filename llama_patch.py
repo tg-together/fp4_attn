@@ -442,7 +442,7 @@ def llama_fp4_attention_forward(
         self.quantize = True
         self.dequant_dtype = self.q_proj.weight.dtype
         self.use_dual_quant_q = os.getenv('FP4_USE_DUAL_QUANT_Q', 'true').lower() == 'true'
-        self.use_dual_quant_attn = os.getenv('FP4_USE_DUAL_QUANT_ATTN', 'true').lower() == 'true'
+        self.use_dual_quant_attn = os.getenv('FP4_USE_DUAL_QUANT_ATTN', 'false').lower() == 'true'
         self.fp_mask = os.getenv('FP_MASK', 'true').lower() == 'true'
         self.ip = os.getenv('IP', 'true').lower() == 'true'
         self.randomization = os.getenv('RANDOMIZATION', 'hadamard').lower()
