@@ -46,7 +46,7 @@ class FastFP4Quantizer(nn.Module):
             raise TypeError("Input must be a torch.Tensor.")
 
 
-    def single_nvfp4(self, x:Tensor, search: bool = False):
+    def single_nvfp4(self, x:Tensor, search: bool = False, transpose: bool = False):
 
         assert x.dim() == 4, "Input must be 4D: (b, h, n, d)"
         b, h, n, d = x.shape
@@ -60,10 +60,12 @@ class FastFP4Quantizer(nn.Module):
             global_sf = global_sf * self.get_reciprocal(self.global_sf_max)
             x=x*self.get_reciprocal(global_sf)[:, None, :, None]
 
-
         n_orig = x.shape[-1]
         n=n_orig
         pad_cols = (self.block_size - n_orig % self.block_size) % self.block_size
+
+        if transpose:
+            x = x.permute(0, 1, 3, 2)
 
         if pad_cols != 0:
             x = torch.nn.functional.pad(x, (0, pad_cols), value=0.0)
@@ -76,6 +78,9 @@ class FastFP4Quantizer(nn.Module):
 
         if n != n_orig:
             reconstructed_f32 = reconstructed_f32[:, :, :, :n_orig]
+        
+        if transpose:
+            reconstructed_f32 = reconstructed_f32.permute(0, 1, 3, 2)
 
         if self.global_sf_max is not None:
             return reconstructed_f32, global_sf
@@ -84,14 +89,12 @@ class FastFP4Quantizer(nn.Module):
 
 
 
-    def dual_nvfp4(self, x:Tensor, search: bool = False):
+    def dual_nvfp4(self, x:Tensor, search: bool = False, transpose: bool = False):
 
-
-
-        x_hi_q, scales_hi = self.single_nvfp4(x, search) 
+        x_hi_q, scales_hi = self.single_nvfp4(x, search, transpose) 
         
 
-        x_lo_q, scales_lo = self.single_nvfp4(x - x_hi_q*scales_hi[:, None, :, None], search)
+        x_lo_q, scales_lo = self.single_nvfp4(x - x_hi_q*scales_hi[:, None, :, None], search, transpose)
 
         return x_hi_q, x_lo_q, scales_hi, scales_lo
 
@@ -99,6 +102,8 @@ if __name__ == "__main__":
     quantizer = FastFP4Quantizer()
     x = torch.randn(1, 1, 1024, 128, device="cuda", dtype=torch.float32)
     x_hi_q, x_lo_q, scales_hi, scales_lo = quantizer.dual_nvfp4(x, search=False)
+    x_hi_q, x_lo_q, scales_hi, scales_lo = quantizer.dual_nvfp4(x, search=True, transpose=False)
+    x_hi_q, x_lo_q, scales_hi, scales_lo = quantizer.dual_nvfp4(x, search=True, transpose=True)
     print(x_hi_q.shape)
     print(x_lo_q.shape)
     print(scales_hi.shape)
