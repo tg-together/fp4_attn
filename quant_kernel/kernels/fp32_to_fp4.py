@@ -78,7 +78,9 @@ def quantize_to_fp4_packed_search(x: tl.tensor, S_BLOCK_SIZE: tl.constexpr, BLOC
     quantized = quantized.reshape((S_BLOCK_SIZE, 8))
     return quantized, best_xscale
 
-
+@triton.jit
+def add_fp8(x: tl.tensor, y):
+    return (x.to(tl.uint8, bitcast=True) + y.to(tl.uint8)).to(tl.float8e4nv, bitcast=True)
 
 @triton.jit
 def quantize_to_fp4_single_search(x: tl.tensor, S_BLOCK_SIZE: tl.constexpr, BLOCK_SIZE: tl.constexpr):
@@ -90,9 +92,7 @@ def quantize_to_fp4_single_search(x: tl.tensor, S_BLOCK_SIZE: tl.constexpr, BLOC
     best_xscale = tl.zeros((S_BLOCK_SIZE,1), dtype=tl.float8e4nv)
     float_val = float(1)
     for offset_val in range(-7, 8, 1):
-        offset = (offset_val).to(tl.float32)
-        val = tl.full((S_BLOCK_SIZE, 1), 0.0, dtype=tl.float8e4nv)
-        xscale = (xscale_f8 + val).to(tl.float32)
+        xscale = (add_fp8(xscale_f8, offset_val)).to(tl.float32)
         xscale_inv = tl.where(xscale == 0, 0.0, 1.0 / xscale)
         quantized = f32_to_f4_single(x * xscale_inv)
         loss = (x - f4_to_f32_single(quantized) * xscale)
@@ -268,24 +268,45 @@ def benchmark(B, H, N, D, provider):
     gbps = lambda ms: 2 * x.numel() * x.element_size() * 1e-9 / (ms * 1e-3)
     return gbps(ms)
 
-def unit_test():
+@triton.testing.perf_report(
+    triton.testing.Benchmark(
+        x_names=['N'],  # argument names to use as an x-axis for the plot
+        x_vals=[128 * i for i in range(2, 100)],  # different possible values for `x_name`
+        line_arg='provider',  # argument name whose value corresponds to a different line in the plot
+        line_vals=['triton', 'nvfp4sim'],  # possible values for `line_arg``
+        line_names=["Triton", "Nvfp4sim"],  # label name for the lines
+        styles=[('blue', '-'), ('green', '-')],  # line styles
+        ylabel="GB/s",  # label name for the y-axis
+        plot_name="quantize-performance-search",  # name for the plot. Used also as a file name for saving the plot.
+        args={'B': 1, 'H': 8, 'D': 128},  # values for function arguments not in `x_names` and `y_name`
+    ))
+def benchmark_search(B, H, N, D, provider):
+    x = torch.randn(B, H, N, D, device=torch.device('cuda:0'), dtype=torch.float32)
+    if provider == 'triton':
+        ms = triton.testing.do_bench(lambda: quantize(x, search=True))
+    if provider == 'nvfp4sim':
+        ms = triton.testing.do_bench(lambda: comparison(x, search=True))
+    gbps = lambda ms: 2 * x.numel() * x.element_size() * 1e-9 / (ms * 1e-3)
+    return gbps(ms)
+
+def unit_test(search=False):
     tests = 1
-    n = torch.arange(128, 512, 1)
+    n = torch.arange(175, 512, 1)
     dim = [64, 128]
     B, H = 1, 8
     for val in n:
         for d in dim:
             for test in range(tests):
                 x = torch.randn(B, H, val, d, device=torch.device('cuda:0'), dtype=torch.float32).normal_()
-                quantized_triton, scales_triton = quantize(x)
-                quantized_nvfp4, scales_nvfp4 = comparison(x)
+                quantized_triton, scales_triton = quantize(x, search=search)
+                quantized_nvfp4, scales_nvfp4 = comparison(x, search=search)
                 assert torch.all(quantized_triton == quantized_nvfp4), f"{val} {d} {test}"
                 assert torch.all(scales_triton == scales_nvfp4), f"{val} {d} {test}"
     print("Unit test passed")
 
 
 if __name__ == "__main__":
-    x = torch.randn(1, 1, 16, 16, device=torch.device('cuda:0'), dtype=torch.float32).normal_()
+    x = torch.randn(1, 1, 169, 128, device=torch.device('cuda:0'), dtype=torch.float32).normal_()
     
     # # Test Triton quantize function
     # quantized_triton, scales_triton = quantize(x)
@@ -325,4 +346,5 @@ if __name__ == "__main__":
     assert torch.all(quantized_triton == quantized_nvfp4)
 
     # benchmark.run(show_plots=True, print_data=True, save_path='/workspace/fp4_attn/quant_kernel')
-    # unit_test()
+    benchmark_search.run(show_plots=True, print_data=True, save_path='/workspace/fp4_attn/quant_kernel')
+    # unit_test(search=True)

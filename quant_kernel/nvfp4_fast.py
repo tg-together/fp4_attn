@@ -70,9 +70,9 @@ class FastFP4Quantizer(nn.Module):
         x=x.contiguous()
 
         if search:
-            assert False, "Search not implemented"
+            reconstructed_f32 = quantize_single(x, search=True)
         else:
-            reconstructed_f32 = quantize_single(x)
+            reconstructed_f32 = quantize_single(x, search=False)
 
         if n != n_orig:
             reconstructed_f32 = reconstructed_f32[:, :, :, :n_orig]

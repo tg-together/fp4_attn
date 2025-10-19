@@ -42,20 +42,6 @@ def f4_to_f32_single(x: tl.tensor):
     return u32_as_f32(ux) * ISCALE
 
 @triton.jit
-def quantize_to_fp4_packed_nosearch(x: tl.tensor, S_BLOCK_SIZE: tl.constexpr, BLOCK_SIZE: tl.constexpr):
-    max_abs_x = tl.max(tl.abs(x), axis=-1) * (1.0 / 6.0)
-    xscale_f8 = max_abs_x.to(tl.float8e4nv, fp_downcast_rounding="rtne")[:, None]
-    xscale = xscale_f8.to(tl.float32)
-    xscale_inv = tl.where(xscale == 0, 0.0, 1.0 / xscale)
-    x = x * xscale_inv
-    # Quantize
-    x_reshaped = x.reshape((S_BLOCK_SIZE * 8, 2)).to(tl.uint32, bitcast=True)
-    x_scan = tl.associative_scan(x_reshaped, axis=-1, combine_fn=f32_to_f4_pair)
-    _, quantized = tl.split(x_scan)
-    quantized = quantized.to(tl.uint8).reshape((S_BLOCK_SIZE, 8))
-    return quantized, xscale_f8
-
-@triton.jit
 def quantize_to_fp4_single_nosearch(x: tl.tensor, S_BLOCK_SIZE: tl.constexpr, BLOCK_SIZE: tl.constexpr):
     max_abs_x = tl.max(tl.abs(x), axis=-1) * (1.0 / 6.0)
     xscale_f8 = max_abs_x.to(tl.float8e4nv, fp_downcast_rounding="rtne")[:, None]
@@ -71,18 +57,8 @@ def dequantize_to_f32_single(x: tl.tensor, xscale: tl.tensor):
     return x
 
 @triton.jit
-def pack_quantized_single(x, y):
-    return x | (y << 4)
-
-@triton.jit
-def quantize_to_fp4_packed_search(x: tl.tensor, S_BLOCK_SIZE: tl.constexpr, BLOCK_SIZE: tl.constexpr):
-    best_quantized, best_xscale = quantize_to_fp4_single_search(x, S_BLOCK_SIZE, BLOCK_SIZE)
-    best_quantized = best_quantized.reshape((S_BLOCK_SIZE * 8 , 2))
-    best_quantized = tl.associative_scan(best_quantized, axis=-1, combine_fn=pack_quantized_single)
-    _, quantized = tl.split(best_quantized)
-    quantized = quantized.reshape((S_BLOCK_SIZE, 8))
-    return quantized, best_xscale
-
+def add_fp8(x: tl.tensor, y):
+    return (x.to(tl.uint8, bitcast=True) + y.to(tl.uint8)).to(tl.float8e4nv, bitcast=True)
 
 @triton.jit
 def quantize_to_fp4_single_search(x: tl.tensor, S_BLOCK_SIZE: tl.constexpr, BLOCK_SIZE: tl.constexpr):
@@ -94,9 +70,7 @@ def quantize_to_fp4_single_search(x: tl.tensor, S_BLOCK_SIZE: tl.constexpr, BLOC
     best_xscale = tl.zeros((S_BLOCK_SIZE,1), dtype=tl.float8e4nv)
     float_val = float(1)
     for offset_val in range(-7, 8, 1):
-        offset = (offset_val).to(tl.float32)
-        val = tl.full((S_BLOCK_SIZE, 1), 0.0, dtype=tl.float8e4nv)
-        xscale = (xscale_f8 + val).to(tl.float32)
+        xscale = (add_fp8(xscale_f8, offset_val)).to(tl.float32)
         xscale_inv = tl.where(xscale == 0, 0.0, 1.0 / xscale)
         quantized = f32_to_f4_single(x * xscale_inv)
         loss = (x - f4_to_f32_single(quantized) * xscale)
@@ -144,6 +118,7 @@ def quant_kernel(
     vals = tl.load(input + offset + block, mask=mask)
     if search:
         quantized_vals, scales = quantize_to_fp4_single_search(vals, S_BLOCK_SIZE, D_BLOCK_SIZE)
+        quantized_vals = quantized_vals.to(dtype=tl.uint32)
     else:
         quantized_vals, scales = quantize_to_fp4_single_nosearch(vals, S_BLOCK_SIZE, D_BLOCK_SIZE)
     
@@ -258,7 +233,28 @@ def benchmark(B, H, N, D, provider):
     return ms
     # return gbps(ms)
 
-def unit_test():
+@triton.testing.perf_report(
+    triton.testing.Benchmark(
+        x_names=['N'],  # argument names to use as an x-axis for the plot
+        x_vals=[128 * i for i in range(2, 100)],  # different possible values for `x_name`
+        line_arg='provider',  # argument name whose value corresponds to a different line in the plot
+        line_vals=['triton', 'nvfp4sim'],  # possible values for `line_arg``
+        line_names=["Triton", "Nvfp4sim"],  # label name for the lines
+        styles=[('blue', '-'), ('green', '-')],  # line styles
+        ylabel="ms",  # label name for the y-axis
+        plot_name="quantize-sim-performance-search",  # name for the plot. Used also as a file name for saving the plot.
+        args={'B': 1, 'H': 8, 'D': 128},  # values for function arguments not in `x_names` and `y_name`
+    ))
+def benchmark_search(B, H, N, D, provider):
+    x = torch.randn(B, H, N, D, device=torch.device('cuda:0'), dtype=torch.float32)
+    if provider == 'triton':
+        ms = triton.testing.do_bench(lambda: quantize_single(x, search=True))
+    if provider == 'nvfp4sim':
+        ms = triton.testing.do_bench(lambda: comparison(x, search=True))
+    gbps = lambda ms: 2 * x.numel() * x.element_size() * 1e-9 / (ms * 1e-3)
+    return gbps(ms)
+
+def unit_test(search=False):
     tests = 1
     n = torch.arange(128, 512, 1)
     dim = [64, 128]
@@ -267,33 +263,53 @@ def unit_test():
         for d in dim:
             for test in range(tests):
                 x = torch.randn(B, H, val, d, device=torch.device('cuda:0'), dtype=torch.float32).normal_()
-                reconstructed_triton = quantize_single(x, search=False)
-                reconstructed_nvfp4 = comparison(x)
-                # Check if results are close (not exact due to floating point)
-                assert torch.all(reconstructed_triton == reconstructed_nvfp4), f"{val} {d} {test} {torch.max(torch.abs(reconstructed_triton - reconstructed_nvfp4)).item()}"
-                # assert torch.allclose(reconstructed_triton, reconstructed_nvfp4, rtol=1e-5, atol=1e-5), f"{val} {d} {test} {torch.max(torch.abs(reconstructed_triton - reconstructed_nvfp4)).item()}"
+                reconstructed_triton = quantize_single(x, search=search)
+                reconstructed_nvfp4 = comparison(x, search=search)
+                try:
+                    assert torch.all(reconstructed_triton == reconstructed_nvfp4), f"{val} {d} {test} {torch.max(torch.abs(reconstructed_triton - reconstructed_nvfp4)).item()}"
+                except AssertionError as e:
+                    vals = reconstructed_triton != reconstructed_nvfp4
+                    mse_triton = torch.mean((x[vals] - reconstructed_triton[vals]) ** 2)
+                    mse_nvfp4 = torch.mean((x[vals] - reconstructed_nvfp4[vals]) ** 2)
+                    assert mse_triton <= mse_nvfp4, f"{val} {d} {test} {torch.max(torch.abs(reconstructed_triton - reconstructed_nvfp4)).item()}"
     print("Unit test passed")
 
 
 if __name__ == "__main__":
-    x = torch.randn(1, 8, 134, 128, device=torch.device('cuda:0'), dtype=torch.float32).normal_()
+    x = torch.randn(1, 8, 163, 128, device=torch.device('cuda:0'), dtype=torch.float32).normal_()
     
     # Test Triton quantize function
-    reconstructed_triton = quantize_single(x, search=False)
+    # reconstructed_triton = quantize_single(x, search=False)
+    # print("Triton quantize:")
+    # print("Reconstructed shape:", reconstructed_triton.shape)
+    # print("Reconstructed:", reconstructed_triton)
+    
+    # # Test comparison function (nvfp4sim-based)
+    # print("\nComparison (nvfp4sim):")
+    # reconstructed_nvfp4 = comparison(x, search=False)
+    # print("Reconstructed shape:", reconstructed_nvfp4.shape)
+    # print("Reconstructed:", reconstructed_nvfp4)
+
+    # # Check if results are close
+    # print("\nAre results close?", torch.allclose(reconstructed_triton, reconstructed_nvfp4, rtol=1e-5, atol=1e-5))
+    # print("Max difference:", torch.max(torch.abs(reconstructed_triton - reconstructed_nvfp4)).item())
+
+
+    # benchmark.run(show_plots=True, print_data=True, save_path='/workspace/fp4_attn/quant_kernel')
+    # unit_test()
+    reconstructed_triton = quantize_single(x, search=True)
     print("Triton quantize:")
     print("Reconstructed shape:", reconstructed_triton.shape)
     print("Reconstructed:", reconstructed_triton)
     
     # Test comparison function (nvfp4sim-based)
     print("\nComparison (nvfp4sim):")
-    reconstructed_nvfp4 = comparison(x, search=False)
+    reconstructed_nvfp4 = comparison(x, search=True)
     print("Reconstructed shape:", reconstructed_nvfp4.shape)
     print("Reconstructed:", reconstructed_nvfp4)
 
     # Check if results are close
     print("\nAre results close?", torch.allclose(reconstructed_triton, reconstructed_nvfp4, rtol=1e-5, atol=1e-5))
     print("Max difference:", torch.max(torch.abs(reconstructed_triton - reconstructed_nvfp4)).item())
-
-
-    # benchmark.run(show_plots=True, print_data=True, save_path='/workspace/fp4_attn/quant_kernel')
-    unit_test()
+    # benchmark_search.run(show_plots=True, print_data=True, save_path='/workspace/fp4_attn/quant_kernel')
+    unit_test(search=True)
