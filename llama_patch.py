@@ -15,7 +15,7 @@ from transformers.models.llama.modeling_llama import apply_rotary_pos_emb, eager
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.utils import ModelOutput
 from fp4_quant_utils import FP4Quantizer
-from kernels.nvfp4_fast import FastFP4Quantizer
+from quant_kernel.nvfp4_fast import FastFP4Quantizer
 import time
 import math
 import numpy as np
@@ -201,8 +201,8 @@ def quantize_q(module, q_orig, dual=True):
         Qs_lo = torch.zeros_like(Qs_hi)
     
     if module.fast_fp4_quantizer.global_sf_max is not None:
-        Qs_hi = Qs_hi[:, None, :, None]
-        Qs_lo = Qs_lo[:, None, :, None]
+        Qs_hi = Qs_hi[:, :, :, None]
+        Qs_lo = Qs_lo[:, :, :, None]
 
     return Qq_hi, Qq_lo, Qs_hi, Qs_lo
 
@@ -216,7 +216,7 @@ def quantize_k(module, k_orig):
     Kq_hi, Ks_hi = module.fast_fp4_quantizer.single_nvfp4(k_orig, search=True)
 
     if module.fast_fp4_quantizer.global_sf_max is not None:
-        Ks_hi = Ks_hi[:, None, :, None]
+        Ks_hi = Ks_hi[:, :, :, None]
 
     return Kq_hi, Ks_hi
 
@@ -234,7 +234,7 @@ def quantize_v(module, v_orig):
     Vq_lo = torch.zeros_like(Vq_hi)
 
     if module.fast_fp4_quantizer.global_sf_max is not None:
-        Vs_hi = Vs_hi[:, None, :, None]
+        Vs_hi = Vs_hi[:, :, :, None]
 
     return Vq_hi, Vs_hi
 
@@ -244,20 +244,19 @@ def quantize_p(module, attn_weights, dual=True):
         print("Quantizing P")
         module.p_quant_log=True
 
-    original_shape = attn_weights.shape
 
     if dual:
-        Aq_hi, Aq_lo, As_hi, As_lo = module.fast_fp4_quantizer.dual_nvfp4(attn_weights_2d, search=False)
+        Aq_hi, Aq_lo, As_hi, As_lo = module.fast_fp4_quantizer.dual_nvfp4(attn_weights, search=False)
 
     else:
 
-        Aq_hi,As_hi = module.fast_fp4_quantizer.single_nvfp4(attn_weights_2d, search=False)
+        Aq_hi,As_hi = module.fast_fp4_quantizer.single_nvfp4(attn_weights, search=False)
         Aq_lo = torch.zeros_like(Aq_hi)
         As_lo = torch.zeros_like(As_hi)
 
     if module.fast_fp4_quantizer.global_sf_max is not None:
-        As_hi = As_hi[:, None, :, None]
-        As_lo = As_lo[:, None, :, None]
+        As_hi = As_hi[:, :, :, None]
+        As_lo = As_lo[:, :, :, None]
 
     return Aq_hi, Aq_lo, As_hi, As_lo
 

@@ -14,7 +14,7 @@ from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 from transformers.models.qwen3.modeling_qwen3 import apply_rotary_pos_emb, eager_attention_forward, repeat_kv
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.utils import ModelOutput
-from fp4_quant_utils import FP4Quantizer
+from quant_kernel.nvfp4_fast import FastFP4Quantizer
 import time
 import math
 import numpy as np
@@ -187,33 +187,22 @@ def get_block_indices(T, t_block):
 
     return first_slice, middle_slice, last_slice
 
+
 def quantize_q(module, q_orig, dual=True):
     if not module.q_quant_log:
         print("Quantizing Q")   
         module.q_quant_log=True
 
-    B, H_q, T, D = q_orig.shape
-
-    q_ = q_orig
-
-    q_=q_.permute(0, 2, 1, 3)
-
-    q_=q_.reshape(B * T, H_q, D)
-
     if dual:
-        Qq_hi, Qq_lo, Qs_hi, Qs_lo = module.fp4_quantizer.dual_nvfp4(q_, search=False)
+        Qq_hi, Qq_lo, Qs_hi, Qs_lo = module.fast_fp4_quantizer.dual_nvfp4(q_orig, search=False)
     else:
-        Qq_hi, Qs_hi = module.fp4_quantizer.single_nvfp4(q_, search=False)
+        Qq_hi, Qs_hi = module.fast_fp4_quantizer.single_nvfp4(q_orig, search=False)
         Qq_lo = torch.zeros_like(Qq_hi)
         Qs_lo = torch.zeros_like(Qs_hi)
-
-    Qq_hi=Qq_hi.reshape(B, T, H_q, D).permute(0, 2, 1, 3)
-    Qq_lo = Qq_lo.reshape(B, T, H_q, D).permute(0, 2, 1, 3)
-
-    if module.fp4_quantizer.global_sf_max is not None:
-        Qs_hi = Qs_hi.reshape(B, T, H_q, 1).permute(0, 2, 1, 3)
-        Qs_lo = Qs_lo.reshape(B, T, H_q, 1).permute(0, 2, 1, 3)
-
+    
+    if module.fast_fp4_quantizer.global_sf_max is not None:
+        Qs_hi = Qs_hi[:, :, :, None]
+        Qs_lo = Qs_lo[:, :, :, None]
 
     return Qq_hi, Qq_lo, Qs_hi, Qs_lo
 
@@ -224,23 +213,10 @@ def quantize_k(module, k_orig):
         print("Quantizing K")
         module.k_quant_log=True
 
-    B, H_k, T, D = k_orig.shape
+    Kq_hi, Ks_hi = module.fast_fp4_quantizer.single_nvfp4(k_orig, search=True)
 
-    k_ = k_orig
-
-
-    k_=k_.permute(0, 2, 1, 3)
-
-    k_=k_.reshape(B * T, H_k, D)
-
-
-    Kq_hi, Ks_hi = module.fp4_quantizer.single_nvfp4(k_, search=True)
-
-
-    Kq_hi=Kq_hi.reshape(B, T, H_k, D).permute(0, 2, 1, 3)
-
-    if module.fp4_quantizer.global_sf_max is not None:
-        Ks_hi = Ks_hi.reshape(B, T, H_k, 1).permute(0, 2, 1, 3)
+    if module.fast_fp4_quantizer.global_sf_max is not None:
+        Ks_hi = Ks_hi[:, :, :, None]
 
     return Kq_hi, Ks_hi
 
@@ -252,24 +228,13 @@ def quantize_v(module, v_orig):
         module.v_quant_log=True
 
     B, H_v, T, D = v_orig.shape
-
-
     v_ = v_orig
-    
 
-    v_=v_.permute(0, 2, 1, 3)
-
-    v_=v_.reshape(B * T, H_v, D)
-
-
-
-
-    Vq_hi, Vs_hi = module.fp4_quantizer.single_nvfp4(v_, search=True, transpose=True)
+    Vq_hi, Vs_hi = module.fast_fp4_quantizer.single_nvfp4(v_orig, search=True, transpose=True)
     Vq_lo = torch.zeros_like(Vq_hi)
 
-    Vq_hi=Vq_hi.reshape(B, T, H_v, D).permute(0, 2, 1, 3)
-    if module.fp4_quantizer.global_sf_max is not None:
-        Vs_hi = Vs_hi.reshape(B, T, H_v, 1).permute(0, 2, 1, 3)
+    if module.fast_fp4_quantizer.global_sf_max is not None:
+        Vs_hi = Vs_hi[:, :, :, None]
 
     return Vq_hi, Vs_hi
 
@@ -279,24 +244,19 @@ def quantize_p(module, attn_weights, dual=True):
         print("Quantizing P")
         module.p_quant_log=True
 
-    original_shape = attn_weights.shape
-    attn_weights_2d = attn_weights.reshape(-1, attn_weights.shape[-1])
 
     if dual:
-        Aq_hi, Aq_lo, As_hi, As_lo = module.fp4_quantizer.dual_nvfp4(attn_weights_2d, search=False)
+        Aq_hi, Aq_lo, As_hi, As_lo = module.fast_fp4_quantizer.dual_nvfp4(attn_weights, search=False)
 
     else:
 
-        Aq_hi,As_hi = module.fp4_quantizer.single_nvfp4(attn_weights_2d, search=False)
+        Aq_hi,As_hi = module.fast_fp4_quantizer.single_nvfp4(attn_weights, search=False)
         Aq_lo = torch.zeros_like(Aq_hi)
         As_lo = torch.zeros_like(As_hi)
 
-    Aq_hi = Aq_hi.reshape(original_shape)
-    Aq_lo = Aq_lo.reshape(original_shape)
-
-    if module.fp4_quantizer.global_sf_max is not None:
-        As_hi = As_hi.reshape(*original_shape[:-1],1)
-        As_lo = As_lo.reshape(*original_shape[:-1],1)
+    if module.fast_fp4_quantizer.global_sf_max is not None:
+        As_hi = As_hi[:, :, :, None]
+        As_lo = As_lo[:, :, :, None]
 
     return Aq_hi, Aq_lo, As_hi, As_lo
 
@@ -437,7 +397,7 @@ def qwen3_fp4_attention_forward(
 
     
     self.attention_block_size=int(os.getenv('ATTENTION_BLOCK_SIZE', '256'))
-    # Initialize FP4Quantizer if not already present
+    # Initialize FastFP4Quantizer if not already present
     if hasattr(qwen3_fp4_attention_forward, 'quantize_enabled') and qwen3_fp4_attention_forward.quantize_enabled and not hasattr(self, 'fp4_quantizer'):
         self.quantize = True
         self.dequant_dtype = self.q_proj.weight.dtype
@@ -461,8 +421,8 @@ def qwen3_fp4_attention_forward(
                 raise ValueError(f"QK Hessian file not found: {qk_hessian_file}")
     
             
-        # Initialize FP4Quantizer with appropriate parameters
-        self.fp4_quantizer = FP4Quantizer(global_sf_max=1536, device=self.q_proj.weight.device)
+        # Initialize FastFP4Quantizer with appropriate parameters
+        self.fp4_quantizer = FastFP4Quantizer(global_sf_max=1536, device=self.q_proj.weight.device)
         self.q_quant_log=False
         self.k_quant_log=False
         self.v_quant_log=False

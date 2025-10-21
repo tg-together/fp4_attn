@@ -55,10 +55,10 @@ class FastFP4Quantizer(nn.Module):
         x=x.to(torch.float32)
 
         if self.global_sf_max is not None:
-            global_sf = torch.max(abs(x.permute(0, 2, 1, 3).reshape(b, n, h*d)), dim=-1)[0].to(torch.float32)
+            global_sf = torch.max(abs(x, dim=-1)[0].to(torch.float32))
 
             global_sf = global_sf * self.get_reciprocal(self.global_sf_max)
-            x=x*self.get_reciprocal(global_sf)[:, None, :, None]
+            x=x*self.get_reciprocal(global_sf)[:, :, :, None]
 
         n_orig = x.shape[-1]
         n=n_orig
