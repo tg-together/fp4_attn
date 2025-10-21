@@ -10,7 +10,7 @@ import torch
 import math
 from torch import nn, Tensor
 from typing import Tuple
-from kernels.fp32_to_fp4sim import quantize_single
+from .kernels.fp32_to_fp4sim import quantize_single
 import time
 
 
@@ -55,7 +55,7 @@ class FastFP4Quantizer(nn.Module):
         x=x.to(torch.float32)
 
         if self.global_sf_max is not None:
-            global_sf = torch.max(abs(x, dim=-1)[0].to(torch.float32))
+            global_sf = torch.max(abs(x), dim=-1)[0].to(torch.float32)
 
             global_sf = global_sf * self.get_reciprocal(self.global_sf_max)
             x=x*self.get_reciprocal(global_sf)[:, :, :, None]
@@ -94,7 +94,7 @@ class FastFP4Quantizer(nn.Module):
         x_hi_q, scales_hi = self.single_nvfp4(x, search, transpose) 
         
 
-        x_lo_q, scales_lo = self.single_nvfp4(x - x_hi_q*scales_hi[:, None, :, None], search, transpose)
+        x_lo_q, scales_lo = self.single_nvfp4(x - x_hi_q*scales_hi[:, :, :, None], search, transpose)
 
         return x_hi_q, x_lo_q, scales_hi, scales_lo
 
