@@ -519,7 +519,9 @@ def llama_fp4_attention_forward(
             if remaining_slice is not None:
                 self.unquantized_cache["K"] = key_states[:, :, remaining_slice, :]
                 self.unquantized_cache["V"] = value_states[:, :, remaining_slice, :]
-
+            else:
+                self.unquantized_cache["K"] = None
+                self.unquantized_cache["V"] = None
             
             self.mode="prefill"
 
