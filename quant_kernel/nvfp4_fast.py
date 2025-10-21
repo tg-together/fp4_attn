@@ -60,16 +60,16 @@ class FastFP4Quantizer(nn.Module):
             global_sf = global_sf * self.get_reciprocal(self.global_sf_max)
             x=x*self.get_reciprocal(global_sf)[:, :, :, None]
 
-        n_orig = x.shape[-1]
-        n=n_orig
-        pad_cols = (self.block_size - n_orig % self.block_size) % self.block_size
 
         if transpose:
             x = x.permute(0, 1, 3, 2)
 
+        n_orig = x.shape[-1]
+        n=n_orig
+        pad_cols = (self.block_size - n_orig % self.block_size) % self.block_size
+
         if pad_cols != 0:
             x = torch.nn.functional.pad(x, (0, pad_cols), value=0.0)
-        x=x.contiguous()
 
         if search:
             reconstructed_f32 = quantize_single(x, search=True)
