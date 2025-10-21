@@ -43,10 +43,11 @@ def f4_to_f32_single(x: tl.tensor):
 
 @triton.jit
 def quantize_to_fp4_single_nosearch(x: tl.tensor, S_BLOCK_SIZE: tl.constexpr, BLOCK_SIZE: tl.constexpr):
-    max_abs_x = tl.max(tl.abs(x), axis=-1) * (1.0 / 6.0)
+    max_abs_x = tl.maximum(tl.max(tl.abs(x), axis=-1), 1e-10) * (1.0 / 6.0)
+    max_abs_x = tl.clamp(max_abs_x, 1e-10 / 6.0, 448.0)
     xscale_f8 = max_abs_x.to(tl.float8e4nv, fp_downcast_rounding="rtne")[:, None]
     xscale = xscale_f8.to(tl.float32)
-    xscale_inv = tl.where(xscale == 0, 0.0, 1.0 / xscale)
+    xscale_inv = 1.0 / xscale
     x = x * xscale_inv
     quantized = f32_to_f4_single(x)
     return quantized, xscale_f8
@@ -62,16 +63,15 @@ def add_fp8(x: tl.tensor, y):
 
 @triton.jit
 def quantize_to_fp4_single_search(x: tl.tensor, S_BLOCK_SIZE: tl.constexpr, BLOCK_SIZE: tl.constexpr):
-    max_abs_x = tl.max(tl.abs(x), axis=-1) * (1.0 / 6.0)
+    max_abs_x = tl.maximum(tl.max(tl.abs(x), axis=-1), 1e-10) * (1.0 / 6.0)
+    max_abs_x = tl.clamp(max_abs_x, 1e-10 / 6.0, 448.0)
     xscale_f8 = max_abs_x.to(tl.float8e4nv, fp_downcast_rounding="rtne")[:, None]
-
     best_loss = tl.full((S_BLOCK_SIZE,), float("inf"), dtype=tl.float32)
     best_quantized = tl.zeros((S_BLOCK_SIZE, 16), dtype=tl.uint8)
     best_xscale = tl.zeros((S_BLOCK_SIZE,1), dtype=tl.float8e4nv)
-    float_val = float(1)
-    for offset_val in range(-7, 8, 1):
+    for offset_val in range(-7, 9, 1):
         xscale = (add_fp8(xscale_f8, offset_val)).to(tl.float32)
-        xscale_inv = tl.where(xscale == 0, 0.0, 1.0 / xscale)
+        xscale_inv = 1.0 / xscale
         quantized = f32_to_f4_single(x * xscale_inv)
         loss = (x - f4_to_f32_single(quantized) * xscale)
         loss = tl.sum(loss * loss, axis=-1)
