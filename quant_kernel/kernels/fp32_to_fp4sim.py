@@ -137,7 +137,7 @@ def quantize_single(x: torch.tensor, search: bool = False):
     BLOCK_SIZE = 16
     assert d % BLOCK_SIZE == 0
 
-    x = x.reshape(b * h, n * (d // BLOCK_SIZE), BLOCK_SIZE) 
+    x = x.reshape(b * h, n * (d // BLOCK_SIZE), BLOCK_SIZE).contiguous()
     rb, rs, rn = x.shape
     output = torch.empty((rb, rs, rn), dtype=torch.float32, device=x.device)
     
