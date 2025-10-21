@@ -115,7 +115,7 @@ def quant_kernel(
     mask = s_block < seq_len
     block = s_block * stride_seq_input + d_block
 
-    vals = tl.load(input + offset + block, mask=mask, padding_option="zero")
+    vals = tl.load(input + offset + block, mask=mask, other=0.0)
     if search:
         quantized_vals, scales = quantize_to_fp4_single_search(vals, S_BLOCK_SIZE, D_BLOCK_SIZE)
         quantized_vals = quantized_vals.to(dtype=tl.uint32)
