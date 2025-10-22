@@ -7,7 +7,12 @@
 # =============================================================================
 
 export HF_HOME=/scratch/huggingface
+<<<<<<< HEAD
 export HF_TOKEN=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
+=======
+export HF_TOKEN=XXX
+
+>>>>>>> 7fc8fae454dd74fb65a2aa12555f5ca4fe413997
 export HF_HOME_DATASETS=/scratch/huggingface/datasets
 export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 
