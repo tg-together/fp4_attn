@@ -60,7 +60,7 @@ def add_fp8(x: tl.tensor, y):
     return (x.to(tl.uint8, bitcast=True) + y.to(tl.uint8)).to(tl.float8e4nv, bitcast=True)
 
 @triton.jit
-def quantize_to_fp4_single_search(x: tl.tensor, S_BLOCK_SIZE: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+def quantize_to_fp4_single_search(x: tl.tensor, S_BLOCK_SIZE: tl.constexpr, BLOCK_SIZE: tl.constexpr, min_range: tl.constexpr, max_range: tl.constexpr):
     max_abs_x = tl.maximum(tl.max(tl.abs(x), axis=-1), 1e-10) * (1.0 / 6.0)
     max_abs_x = tl.clamp(max_abs_x, 1e-10 / 6.0, 448.0)
     xscale_f8 = max_abs_x.to(tl.float8e4nv, fp_downcast_rounding="rtne")[:, None]
@@ -68,7 +68,7 @@ def quantize_to_fp4_single_search(x: tl.tensor, S_BLOCK_SIZE: tl.constexpr, BLOC
     best_quantized = tl.zeros((S_BLOCK_SIZE, 16), dtype=tl.uint8)
     best_xscale = tl.zeros((S_BLOCK_SIZE,1), dtype=tl.float8e4nv)
     best_offset = tl.zeros((S_BLOCK_SIZE,1), dtype=tl.int8)
-    for offset_val in range(-7, 9, 1):
+    for offset_val in range(min_range, max_range + 1, 1):
         xscale = (add_fp8(xscale_f8, offset_val)).to(tl.float32)
         xscale_inv = 1.0 / xscale
         quantized = f32_to_f4_single(x * xscale_inv)
@@ -106,6 +106,8 @@ def quant_kernel(
     seq_len: tl.int32,
     S_BLOCK_SIZE: tl.constexpr,
     D_BLOCK_SIZE: tl.constexpr,
+    min_range: tl.constexpr,
+    max_range: tl.constexpr,
 ): 
     off_blk = tl.program_id(0)
     off_s = tl.program_id(1)
@@ -117,7 +119,7 @@ def quant_kernel(
     block = s_block * stride_seq_input + d_block
 
     vals = tl.load(input + offset + block, mask=mask, other=0.0)
-    quantized_vals, scales, offset = quantize_to_fp4_single_search(vals, S_BLOCK_SIZE, D_BLOCK_SIZE)
+    quantized_vals, scales, offset = quantize_to_fp4_single_search(vals, S_BLOCK_SIZE, D_BLOCK_SIZE, min_range, max_range)
     quantized_vals = quantized_vals.to(dtype=tl.uint32)
     reconstructed_vals = dequantize_to_f32_single(quantized_vals, scales)
 
@@ -135,7 +137,7 @@ def quant_kernel(
     tl.store(scale_offset_distribution + s_offset + block, offset, mask=mask)
 
 
-def quantize_single(x: torch.tensor):
+def quantize_single(x: torch.tensor, min_range: int = -7, max_range: int = 8):
     b, h, n, d = x.shape
     BLOCK_SIZE = 16
     assert d % BLOCK_SIZE == 0
@@ -154,6 +156,8 @@ def quantize_single(x: torch.tensor):
             scale_offset_distribution.stride(0), scale_offset_distribution.stride(1),
             seq_len=rs,
             D_BLOCK_SIZE=BLOCK_SIZE,
+            min_range=min_range,
+            max_range=max_range,
         )
 
     reconstructed_vals = output.reshape(b, h, n, d)
@@ -162,22 +166,23 @@ def quantize_single(x: torch.tensor):
 
 if __name__ == "__main__":
     x = torch.randn(64, 64, 4096, 128, device=torch.device('cuda:0'), dtype=torch.float32).normal_()
-    reconstructed_vals, scale_offset_distribution = quantize_single(x)
+    min_range, max_range = -15, 16
+    reconstructed_vals, scale_offset_distribution = quantize_single(x, min_range=min_range, max_range=max_range)
     scale_offset_distribution_uns = scale_offset_distribution.flatten()
 
-    # Split into buckets
-    boundaries = torch.arange(-8, 8, 1, dtype=torch.int8, device=x.device)
-    hist_labels = torch.bucketize(scale_offset_distribution_uns, boundaries)
-    histogram = torch.bincount(hist_labels)
-    probs = histogram / histogram.sum()
+    # Count occurrences of each discrete offset value
+    histogram = torch.zeros(max_range - min_range + 1, dtype=torch.long, device=x.device)
+    for i, val in enumerate(range(min_range, max_range + 1)):
+        histogram[i] = (scale_offset_distribution_uns == val).sum()
+    probs = histogram.float() / histogram.sum()
     print(probs)
     
     # Plot the histogram
     plt.figure(figsize=(10, 6))
-    plt.bar(range(-8, 8, 1), probs.cpu().numpy())
+    plt.bar(range(min_range, max_range + 1, 1), probs.cpu().numpy())
     plt.xlabel('Offset Bucket')
-    plt.ylabel('Count')
-    plt.title('Scale Offset Distribution Histogram')
+    plt.ylabel('Probability')
+    plt.title('Scale Offset Distribution Probabilities')
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.savefig('scale_offset_probs.png', dpi=150)
