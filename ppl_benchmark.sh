@@ -72,32 +72,34 @@ elif [ "$MODE" = "all" ]; then
     MODEL="meta-llama/Llama-3.1-70B"
     CUDA_VISIBLE_DEVICES=3,4  python -u eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 --batch_size 1 --quantize > "logs/ppl_benchmark/fp4/${MODEL##*/}_ppl.txt" 2>&1 &
     
-    # FP4 non-70B models on 3 different GPUs
-    MODEL="meta-llama/Llama-3.1-8B"
-    CUDA_VISIBLE_DEVICES=5  python -u eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 --quantize > "logs/ppl_benchmark/fp4/${MODEL##*/}_ppl.txt" 2>&1 &
-    
-    MODEL="Qwen/Qwen3-8B"
-    CUDA_VISIBLE_DEVICES=6  python -u eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 --quantize --batch_size 3 > "logs/ppl_benchmark/fp4/${MODEL##*/}_ppl.txt" 2>&1 &
-    
-    MODEL="Qwen/Qwen3-4B"
-    CUDA_VISIBLE_DEVICES=7  python -u eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 --quantize > "logs/ppl_benchmark/fp4/${MODEL##*/}_ppl.txt" 2>&1 &
+    (
+        # FP4 non-70B models on 3 different GPUs
+        MODEL="meta-llama/Llama-3.1-8B"
+        CUDA_VISIBLE_DEVICES=5,6  python -u eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 --quantize > "logs/ppl_benchmark/fp4/${MODEL##*/}_ppl.txt" 2>&1
+        
+        MODEL="Qwen/Qwen3-8B"
+        CUDA_VISIBLE_DEVICES=5,6  python -u eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 --quantize --batch_size 3 > "logs/ppl_benchmark/fp4/${MODEL##*/}_ppl.txt" 2>&1
+        
+        MODEL="Qwen/Qwen3-4B"
+        CUDA_VISIBLE_DEVICES=5,6  python -u eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 --quantize > "logs/ppl_benchmark/fp4/${MODEL##*/}_ppl.txt" 2>&1
+    ) &
 
 elif [ "$MODE" = "fp4" ]; then
     mkdir -p "logs/ppl_benchmark/fp4/"
     
     # FP4 70B model on 2 GPUs
-    MODEL="meta-llama/Llama-3.1-70B"
-    CUDA_VISIBLE_DEVICES=3,4  python -u eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 --batch_size 1 --quantize > "logs/ppl_benchmark/fp4/${MODEL##*/}_ppl.txt" 2>&1 &
+    # MODEL="meta-llama/Llama-3.1-70B"
+    # CUDA_VISIBLE_DEVICES=3,4  python -u eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 --batch_size 1 --quantize > "logs/ppl_benchmark/fp4/${MODEL##*/}_ppl.txt" 2>&1 &
     
     # FP4 non-70B models on 3 different GPUs
     MODEL="meta-llama/Llama-3.1-8B"
-    CUDA_VISIBLE_DEVICES=5  python -u eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 --quantize > "logs/ppl_benchmark/fp4/${MODEL##*/}_ppl.txt" 2>&1 &
+    CUDA_VISIBLE_DEVICES=5,6  python -u eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 --quantize > "logs/ppl_benchmark/fp4/${MODEL##*/}_ppl.txt" 2>&1 &
     
-    MODEL="Qwen/Qwen3-8B"
-    CUDA_VISIBLE_DEVICES=6  python -u eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 --quantize --batch_size 3 > "logs/ppl_benchmark/fp4/${MODEL##*/}_ppl.txt" 2>&1 &
+    # MODEL="Qwen/Qwen3-8B"
+    # CUDA_VISIBLE_DEVICES=6  python -u eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 --quantize --batch_size 3 > "logs/ppl_benchmark/fp4/${MODEL##*/}_ppl.txt" 2>&1 &
     
-    MODEL="Qwen/Qwen3-4B"
-    CUDA_VISIBLE_DEVICES=7  python -u eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 --quantize > "logs/ppl_benchmark/fp4/${MODEL##*/}_ppl.txt" 2>&1 &
+    # MODEL="Qwen/Qwen3-4B"
+    # CUDA_VISIBLE_DEVICES=7  python -u eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 --quantize > "logs/ppl_benchmark/fp4/${MODEL##*/}_ppl.txt" 2>&1 &
 
 elif [ "$MODE" = "kvquant" ]; then
     mkdir -p "logs/ppl_benchmark/kvquant/"

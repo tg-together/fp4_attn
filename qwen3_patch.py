@@ -196,7 +196,7 @@ def quantize_q(module, q_orig, dual=True):
     if dual:
         Qq_hi, Qq_lo, Qs_hi, Qs_lo = module.fast_fp4_quantizer.dual_nvfp4(q_orig, search=False)
     else:
-        Qq_hi, Qs_hi = module.fast_fp4_quantizer.single_nvfp4(q_orig, search=False)
+        Qq_hi, Qs_hi = module.fast_fp4_quantizer.single_nvfp4(q_orig, search=True)
         Qq_lo = torch.zeros_like(Qq_hi)
         Qs_lo = torch.zeros_like(Qs_hi)
     
@@ -401,7 +401,7 @@ def qwen3_fp4_attention_forward(
     if hasattr(qwen3_fp4_attention_forward, 'quantize_enabled') and qwen3_fp4_attention_forward.quantize_enabled and not hasattr(self, 'fast_fp4_quantizer'):
         self.quantize = True
         self.dequant_dtype = self.q_proj.weight.dtype
-        self.use_dual_quant_q = os.getenv('FP4_USE_DUAL_QUANT_Q', 'true').lower() == 'true'
+        self.use_dual_quant_q = os.getenv('FP4_USE_DUAL_QUANT_Q', 'false').lower() == 'true'
         self.use_dual_quant_attn = os.getenv('FP4_USE_DUAL_QUANT_ATTN', 'false').lower() == 'true'
         self.fp_mask = os.getenv('FP_MASK', 'true').lower() == 'true'
         self.ip = os.getenv('IP', 'true').lower() == 'true'
