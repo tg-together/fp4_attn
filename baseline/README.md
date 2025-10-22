@@ -7,7 +7,7 @@
 | `aime24` | Math competition problems | 10 |
 | `gsm8k_cot_llama` | Grade school math | 5 |
 | `humaneval_instruct` | Code generation | 3 |
-| `gpqa_diamond_cot_n_shot` | Graduate science QA | 10 |
+| `gpqa_diamond_cot_n_shot` | Graduate science QA | 3 |
 
 
 ```bash
