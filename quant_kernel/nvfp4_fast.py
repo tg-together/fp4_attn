@@ -50,7 +50,7 @@ class FastFP4Quantizer(nn.Module):
 
         assert x.dim() == 4, "Input must be 4D: (b, h, n, d)"
         b, h, n, d = x.shape
-        assert d % self.block_size == 0, "d must be divisible by block_size"
+        # assert d % self.block_size == 0, "d must be divisible by block_size"
 
         x=x.to(torch.float32)
 
@@ -70,6 +70,7 @@ class FastFP4Quantizer(nn.Module):
 
         if pad_cols != 0:
             x = torch.nn.functional.pad(x, (0, pad_cols), value=0.0)
+            n=x.shape[-1]
 
         if search:
             reconstructed_f32 = quantize_single(x, search=True)

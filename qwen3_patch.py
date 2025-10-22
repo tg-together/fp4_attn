@@ -398,7 +398,7 @@ def qwen3_fp4_attention_forward(
     
     self.attention_block_size=int(os.getenv('ATTENTION_BLOCK_SIZE', '256'))
     # Initialize FastFP4Quantizer if not already present
-    if hasattr(qwen3_fp4_attention_forward, 'quantize_enabled') and qwen3_fp4_attention_forward.quantize_enabled and not hasattr(self, 'fp4_quantizer'):
+    if hasattr(qwen3_fp4_attention_forward, 'quantize_enabled') and qwen3_fp4_attention_forward.quantize_enabled and not hasattr(self, 'fast_fp4_quantizer'):
         self.quantize = True
         self.dequant_dtype = self.q_proj.weight.dtype
         self.use_dual_quant_q = os.getenv('FP4_USE_DUAL_QUANT_Q', 'true').lower() == 'true'
@@ -422,7 +422,7 @@ def qwen3_fp4_attention_forward(
     
             
         # Initialize FastFP4Quantizer with appropriate parameters
-        self.fp4_quantizer = FastFP4Quantizer(global_sf_max=1536, device=self.q_proj.weight.device)
+        self.fast_fp4_quantizer = FastFP4Quantizer(global_sf_max=1536, device=self.q_proj.weight.device)
         self.q_quant_log=False
         self.k_quant_log=False
         self.v_quant_log=False

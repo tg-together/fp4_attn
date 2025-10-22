@@ -398,7 +398,7 @@ def llama_fp4_attention_forward(
     
     self.attention_block_size=int(os.getenv('ATTENTION_BLOCK_SIZE', '256'))
     # Initialize FP4Quantizer if not already present
-    if hasattr(llama_fp4_attention_forward, 'quantize_enabled') and llama_fp4_attention_forward.quantize_enabled and not hasattr(self, 'fp4_quantizer'):
+    if hasattr(llama_fp4_attention_forward, 'quantize_enabled') and llama_fp4_attention_forward.quantize_enabled and not hasattr(self, 'fast_fp4_quantizer'):
         self.quantize = True
         self.dequant_dtype = self.q_proj.weight.dtype
         self.use_dual_quant_q = os.getenv('FP4_USE_DUAL_QUANT_Q', 'true').lower() == 'true'
@@ -422,7 +422,6 @@ def llama_fp4_attention_forward(
     
             
         # Initialize FP4Quantizer with appropriate parameters
-        self.fp4_quantizer = FP4Quantizer(global_sf_max=1536, device=self.q_proj.weight.device)
         self.fast_fp4_quantizer = FastFP4Quantizer(global_sf_max=1536, device=self.q_proj.weight.device)
         self.q_quant_log=False
         self.k_quant_log=False
@@ -497,8 +496,7 @@ def llama_fp4_attention_forward(
                 self.unquantized_cache["V"] = torch.cat([self.unquantized_cache["V"], value_states], dim=2)
 
 
-            self.mode="decode"           
-
+            self.mode="decode"          
         
         Qq_hi, Qq_lo, Qs_hi, Qs_lo = quantize_q(self, query_states, dual=self.use_dual_quant_q)
         query_states = Qq_hi*Qs_hi + Qq_lo*Qs_lo 
