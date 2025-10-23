@@ -202,6 +202,7 @@ def run_evaluation_repeats(
     Returns:
         Updated list of all results (same as all_results parameter)
     """
+
     # Task-specific configuration (same for all repeats)
     task_lower = task.lower()
     if "aime" in task_lower:
@@ -468,7 +469,7 @@ def eval_model_baseline(
         fewshot_multiturn = False
         max_new_tokens = 4096
         print(f"Task config: {task} (apply_chat_template=False, fewshot_as_multiturn=False)")
-    
+
     gen_kwargs = {
         # "past_key_values": None,  # Use default HF DynamicCache (FP16)
         "max_new_tokens": max_new_tokens,
@@ -478,8 +479,8 @@ def eval_model_baseline(
         "temperature": 0.6,
         "top_p": 0.95,
         "top_k": 20,
-        "max_new_tokens": 4096,
     }
+    
 
     # Enable code evaluation for humaneval task
     if "humaneval" in task:

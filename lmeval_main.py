@@ -144,6 +144,9 @@ def main():
     """Main entry point for baseline evaluation."""
     args = build_parser().parse_args()
 
+    model_short = args.model.split('/')[-1] if '/' in args.model else args.model
+    llama_patch.hessian_folder = f"dumps/{model_short}_wikitext2"
+    qwen3_patch.hessian_folder = f"dumps/{model_short}_wikitext2"
     patch_attention()
     llama_fp4_attention_forward.quantize_enabled = True
     qwen3_fp4_attention_forward.quantize_enabled = True
@@ -194,6 +197,7 @@ def main():
         print("  - Try: huggingface-cli login")
         print("  - Check if the model name is correct")
         return
+    ##check if attention has been patched
 
     # Run evaluation
     try:

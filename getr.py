@@ -51,7 +51,7 @@ def incoherence_processing( QH, KH):
     return R, invR
 
 # model_strs = ["meta-llama/Llama-3.2-3B-Instruct", "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B", "Qwen/Qwen3-4B-Thinking-2507","meta-llama/Llama-3.3-70B-Instruct",  "Qwen/Qwen3-8B", "Qwen/Qwen3-4B", "meta-llama/Llama-3.1-70B"]
-model_strs = ["meta-llama/Llama-3.1-8B-Instruct"]
+model_strs = ["Qwen/Qwen3-14B"]
 for model_str in model_strs:
     mag_reduce={}
     model_short = model_str.split('/')[-1] if '/' in model_str else model_str
