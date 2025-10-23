@@ -1,142 +1,45 @@
 #!/usr/bin/env python3
+"""
+Baseline FP16 Evaluation for LLMs
+==================================
+
+This script provides a faithful baseline evaluation that matches RoCK-KV evaluation
+in every aspect EXCEPT the KV cache (uses FP16 DynamicCache instead of quantization).
+
+All subtle task-specific parameters are preserved:
+- Sampling parameters (temperature, top_p, top_k) from task YAML
+- Model-specific and task-specific stop words
+- Few-shot configuration per task
+- Max tokens per task type
+- Batch size control
+- Multi-repeat evaluation with unique seeds
+- Chat template application (for AIME)
+- Code execution (for HumanEval)
+
+The ONLY difference from RoCK-KV: past_key_values=None → FP16 DynamicCache
+
+Usage Examples:
+    python baseline.py "Qwen/Qwen3-8B" --task aime24 --num_repeats 10 --batch_size 2
+    python baseline.py "meta-llama/Llama-3.1-8B-Instruct" --task gsm8k_cot_llama --batch_size 8
+    python baseline.py "Qwen/Qwen3-8B" --task aime24 --debug
+"""
+
 import argparse
-import json
-import os
-import sys
-from lm_eval import simple_evaluate
-from transformers import AutoModelForCausalLM, AutoConfig
-import transformers
 import torch
+from transformers import AutoModelForCausalLM
+import transformers
+
 import llama_patch
 import qwen3_patch
 from llama_patch import llama_fp4_attention_forward
 from qwen3_patch import qwen3_fp4_attention_forward
-import socket
-from datetime import datetime, timedelta
-import logging
-import numpy as np
 
-
-def get_kvquant_model(model_name):
-    """Get KVQuant quantized model with default settings from run.sh"""
-    # Add KVQuant path to sys.path
-    kvquant_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'KVquant_baseline', 'quant')
-    kvquant_path_root = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'KVquant_baseline')
-    print(f"KVQuant path: {kvquant_path}")
-    print(f"KVQuant path root: {kvquant_path_root}")
-    sys.path.insert(0, kvquant_path)
-    
-    from llama_simquant import run_kvquant, create_parser
-    
-    # Default KVQuant arguments from run.sh (without seqlen - matching lmeval_main.py)
-    kvquant_args = [
-        '--abits', '4',
-        '--nuq',
-        '--first_few_fp16', '1',
-        '--quantizer-path', f'{kvquant_path_root}/output/{model_name.split("/")[-1]}/quantizers.pickle'
-    ]
-    
-    # Parse KVQuant arguments
-    parser = create_parser()
-    args = parser.parse_args([model_name] + kvquant_args)
-    
-    # Get quantized model
-    model = run_kvquant(args, return_model=True)
-
-    print(f"KVQuant model fetched")
-    
-    # Remove from path
-    sys.path.remove(kvquant_path)
-    
-    return model
-
-
-def calculate_perplexity(model, tasks, num_samples=None, device="auto", max_length=2048, **eval_kwargs):
-    """Calculate perplexity using lm_eval."""
-    
-    # Base arguments
-    base_args = {
-        "model": "hf",
-        "model_args": {"pretrained":model,"max_length":max_length,"trust_remote_code":True},
-        "tasks": tasks,
-        "batch_size": 1,
-        "device": device,
-        "confirm_run_unsafe_code":True
-    }
-    
-    # Add limit if specified
-    if num_samples:
-        base_args["limit"] = num_samples
-    
-    # Merge with additional eval arguments
-    base_args.update(eval_kwargs)
-
-    
-    results = simple_evaluate(**base_args)
-    return results
-
-
-def parse_arguments():
-    """Parse command line arguments and return args and eval_kwargs."""
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model", required=True, help="Model name to evaluate")
-    parser.add_argument("--output", help="Output JSON file")
-    parser.add_argument("--num_samples", type=int, default=None, help="Number of samples to evaluate")
-    parser.add_argument("--visualize", action="store_true", help="Enable QKV visualization")
-    parser.add_argument("--record_hessian", action="store_true", help="Record Q Hessian")
-    parser.add_argument("--record_means", action="store_true", help="Record K means")
-    parser.add_argument('--quantize', action='store_true')
-    parser.add_argument("--tag", default="", help="Tag to append to filenames")
-    parser.add_argument("--task", nargs='+', default=["pile_10k", "gsm8k"], help="Task(s) to evaluate (can specify multiple)")
-    parser.add_argument("--hessian_dataset", type=str, default="wikitext2", help="Dataset name to load hessians from (e.g., 'pile_10k')")
-    parser.add_argument("--kvquant", action="store_true", help="Use KVQuant quantization")
-    
-    # Parse known args to capture additional eval arguments
-    args, unknown_args = parser.parse_known_args()
-    
-    # Convert unknown args to kwargs for simple_evaluate
-    eval_kwargs = {}
-    i = 0
-    while i < len(unknown_args):
-        arg = unknown_args[i]
-        
-        # Handle key=value format
-        if '=' in arg and not arg.startswith('--'):
-            key, value = arg.split('=', 1)
-            # Try to convert to appropriate type
-            if value.lower() == 'true':
-                eval_kwargs[key] = True
-            elif value.lower() == 'false':
-                eval_kwargs[key] = False
-            elif value.isdigit():
-                eval_kwargs[key] = int(value)
-            else:
-                eval_kwargs[key] = value
-            i += 1
-        # Handle --key value format
-        elif arg.startswith('--'):
-            key = arg[2:].replace('-', '_')
-            if i + 1 < len(unknown_args) and not unknown_args[i + 1].startswith('--'):
-                # Has value
-                value = unknown_args[i + 1]
-                # Try to convert to appropriate type
-                if value.lower() == 'true':
-                    eval_kwargs[key] = True
-                elif value.lower() == 'false':
-                    eval_kwargs[key] = False
-                elif value.isdigit():
-                    eval_kwargs[key] = int(value)
-                else:
-                    eval_kwargs[key] = value
-                i += 2
-            else:
-                # Boolean flag
-                eval_kwargs[key] = True
-                i += 1
-        else:
-            i += 1
-    
-    return args, eval_kwargs
+# Import all utilities from baseline_utils
+from lmeval_utils import (
+    eval_model_baseline,
+    release_model_memory,
+    print_gpu_memory,
+)
 
 
 def patch_attention():
@@ -160,99 +63,170 @@ def patch_attention():
     transformers.models.llama.modeling_llama.LlamaForCausalLM.__init__ = patched_init_llama
     transformers.models.qwen3.modeling_qwen3.Qwen3ForCausalLM.__init__ = patched_init_qwen3
 
-def patch_lm_eval(kv_quant_model):
-    """Example patches for lm_eval.models.huggingface functions."""
-    # Need to import the specific submodule - lm_eval doesn't expose .models directly
-    from lm_eval.models import huggingface
 
-    
-    def patched_create_model(self, *args, **kwargs):
+def build_parser() -> argparse.ArgumentParser:
+    """Build argument parser with all CLI options."""
+    parser = argparse.ArgumentParser(
+        description="Baseline FP16 evaluation for LLMs (matches RoCK-KV except cache)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Quick debug test (3 samples)
+  python baseline.py "Qwen/Qwen3-8B" --task aime24 --debug
 
-        self._model = kv_quant_model
-        print(f"Using pre-initialized KVQuant model: {self._model}")
-        # Otherwise use original creation logic
-        return
-    
-    huggingface.HFLM._create_model = patched_create_model
+  # Production run (10 repeats)
+  python baseline.py "Qwen/Qwen3-8B" --task aime24 --num_repeats 10 --batch_size 2
+
+  # Multi-GPU for large models
+  CUDA_VISIBLE_DEVICES=0,1 python baseline.py "Qwen/Qwen3-32B" --task gsm8k_cot_llama
+
+Available tasks:
+  - aime24, aime25: Math competition problems
+  - gsm8k_cot_llama: Grade school math
+  - minerva_math_algebra: Advanced math
+  - humaneval_instruct: Code generation
+  - gpqa_diamond_cot_n_shot: Graduate-level science QA
+  - mmlu_flan_cot_fewshot: Multitask language understanding
+        """
+    )
+
+    parser.add_argument(
+        'model',
+        type=str,
+        help='HuggingFace model name or path (e.g., "Qwen/Qwen3-8B")'
+    )
+
+    parser.add_argument(
+        "--task",
+        type=str,
+        default="gsm8k_cot_llama",
+        help="Task name to evaluate (default: gsm8k_cot_llama)"
+    )
+
+    parser.add_argument(
+        "--num_repeats",
+        type=int,
+        default=None,
+        help="Number of evaluation repeats. If not specified, reads from task YAML (default: 1)"
+    )
+
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=1,
+        help="Batch size for inference (default: 1). Increase for speed if memory allows"
+    )
+
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Debug mode: only evaluate 3 samples"
+    )
+
+    parser.add_argument(
+        "--device_map",
+        type=str,
+        default="auto",
+        help="Device map for model loading (default: auto)"
+    )
+
+    parser.add_argument(
+        "--num_fewshot",
+        type=int,
+        default=None,
+        help="Number of few-shot examples (overrides task default). Use 5 for GPQA standard evaluation"
+    )
+
+    return parser
+
 
 def main():
-    args, eval_kwargs = parse_arguments()
-    model_str = args.model
-    
-    print("=" * 50)
-    print("RUNNING WITH ARGUMENTS:")
-    print("=" * 50)
-    for arg, value in vars(args).items():
-        print(f"{arg:25}: {value}")
-    if eval_kwargs:
-        print("Additional eval args:")
-        for key, value in eval_kwargs.items():
-            print(f"{key:25}: {value}")
-    print("=" * 50)
+    """Main entry point for baseline evaluation."""
+    args = build_parser().parse_args()
 
-    # Set quantization flag for llama_patch
-    llama_patch.visualize = args.visualize
-    qwen3_patch.visualize = args.visualize
+    patch_attention()
+    llama_fp4_attention_forward.quantize_enabled = True
+    qwen3_fp4_attention_forward.quantize_enabled = True
+    print(f"Quantization enabled!!!")
 
-    # Set hessian dataset path for loading
+    # Extract clean model name for directory structure
+    model_name = args.model.split("/")[-1]
 
-    model_short = args.model.split('/')[-1] if '/' in args.model else args.model
-    llama_patch.hessian_folder = f"dumps/{model_short}_{args.hessian_dataset}"
-    qwen3_patch.hessian_folder = f"dumps/{model_short}_{args.hessian_dataset}"
+    # Generate output filename
+    file_name = f"{model_name.lower().replace('-', '_')}_fp16_baseline_{args.task}"
 
-
-    if args.visualize:
-        llama_fp4_attention_forward.visualize = args.visualize
-        qwen3_fp4_attention_forward.visualize = args.visualize
-
-    if args.kvquant:
-        args.quantize = False
-        kv_quant_model = get_kvquant_model(model_str)
-        patch_lm_eval(kv_quant_model)
-
-          
+    print(f"\n{'='*80}")
+    print("BASELINE FP16 EVALUATION")
+    print(f"{'='*80}")
+    print(f"Model: {args.model}")
+    print(f"Task: {args.task}")
+    print(f"Batch Size: {args.batch_size}")
+    print(f"Device Map: {args.device_map}")
+    if args.num_repeats:
+        print(f"Num Repeats: {args.num_repeats}")
     else:
-        patch_attention()
-        llama_fp4_attention_forward.quantize_enabled = args.quantize
-        qwen3_fp4_attention_forward.quantize_enabled = args.quantize
-    
-    
-    # Common evaluation path for both FP4 and KVQuant
-    for max_length in [32768+1]:
-        with torch.no_grad():
-            results = calculate_perplexity(
-                model=args.model,
-                tasks=args.task,
-                device="auto",
-                num_samples=args.num_samples,
-                max_length=max_length,
-                **eval_kwargs
-            )
-        
+        print(f"Num Repeats: Will read from task YAML config (default: 1)")
+    if args.num_fewshot is not None:
+        print(f"Few-shot: {args.num_fewshot} examples (overriding task default)")
+    else:
+        print(f"Few-shot: Will use task default")
+    if args.debug:
+        print(f"DEBUG MODE: Limiting to 3 samples")
+    print(f"{'='*80}\n")
 
-        print(f"Model: {args.model}")
-        print(f"Max length: {max_length}")
-        print(f"Quantize: {args.quantize}")
-        print(f"Tag: {args.tag}")
-        for task in args.task:
-            print(f"Task: {task}")
-            try:
-                print(f"Metrics: {results['results'][task]}")
-            except:
-                if results is not None:
-                    print(f"Metrics: {results['results']}")
+    # Load model in FP16
+    print(f"Loading model: {args.model}...")
+    try:
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model,
+            torch_dtype=torch.float16,
+            device_map=args.device_map,
+            trust_remote_code=True
+        )
+        print(f"✓ Model loaded successfully!")
+        print(f"  Model dtype: {model.dtype}")
+        print(f"  Model device: {next(model.parameters()).device}")
+        print()
+    except Exception as e:
+        print(f"✗ Error loading model: {e}")
+        print("\nTroubleshooting:")
+        print("  - Make sure you have access to the model (some require authentication)")
+        print("  - Try: huggingface-cli login")
+        print("  - Check if the model name is correct")
+        return
 
-            
-        if args.output:
-            output_filename = f"{args.output}_{args.tag}.json" if args.tag else args.output
-            with open(output_filename, 'w') as f:
-                json.dump(results, f, indent=2, default=str)
-    
-    # if args.visualize:
-    #     # Create a combined tag that includes both the original tag and task names
-    #     task_str = "_".join(args.task)
-    #     combined_tag = f"{args.tag}_{task_str}" if args.tag else task_str
-    #     save_plots(combined_tag)
+    # Run evaluation
+    try:
+        eval_model_baseline(
+            model=model,
+            task=args.task,
+            model_name=model_name,
+            file_name=file_name,
+            debug=args.debug,
+            num_repeats=args.num_repeats,
+            batch_size=args.batch_size,
+            num_fewshot=args.num_fewshot
+        )
+    except KeyboardInterrupt:
+        print("\n\n[Interrupted] Evaluation interrupted by user (Ctrl+C)")
+        print("[Info] Progress has been saved. Re-run the same command to resume from checkpoint.")
+    except Exception as e:
+        print(f"\n✗ Error during evaluation: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        # Clean up
+        print("\nCleaning up model memory...")
+        release_model_memory(model)
+
+    print(f"\n{'='*80}")
+    print("EVALUATION COMPLETE")
+    print(f"{'='*80}")
+    print(f"Results saved to: eval_results/{model_name}/{args.task}/")
+    print(f"  - Individual repeats: {file_name}_repeat_*.json")
+    print(f"  - Summary statistics: {file_name}_summary.json")
+    print(f"{'='*80}\n")
+
 
 if __name__ == "__main__":
-    main() 
+    main()

@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e  # exit on error
 
-# Initialize conda
+Initialize conda
 eval "$(conda shell.bash hook)"
 
 # Create env
@@ -39,3 +39,9 @@ if [ -d "fast_fp4" ]; then
 else
   echo "Directory fast_fp4 not found. Skipping local install."
 fi
+
+rm -rf /home/tanmaey/miniconda3/envs/fp4/lib/python3.12/site-packages/lm_eval/tasks/gpqa
+rm -rf /home/tanmaey/miniconda3/envs/fp4/lib/python3.12/site-packages/lm_eval/tasks/gsm8k
+rm -rf /home/tanmaey/miniconda3/envs/fp4/lib/python3.12/site-packages/lm_eval/tasks/gsm8k_platinum
+cd tasks
+cp aime/ gpqa/ gsm8k/ gsm8k_platinum/ /home/tanmaey/miniconda3/envs/fp4/lib/python3.12/site-packages/lm_eval/tasks/

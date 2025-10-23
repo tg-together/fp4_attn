@@ -1,134 +1,50 @@
 #!/bin/bash
+# =============================================================================
+# AIME (American Invitational Mathematics Examination) Evaluation
+# =============================================================================
+# AIME tasks are zero-shot math competition problems requiring detailed reasoning
+# Memory-optimized GPU allocation and batch sizes based on model size
+# =============================================================================
 
-# Select which mode to run: baseline, fp4, or kvquant
-MODE="all"  # Options: baseline, fp4, kvquant
 
-# Task-specific configuration
-TASK="aime25"
 
-# Common suffix for all commands
-SUFFIX_CMD="--task ${TASK} --apply_chat_template --fewshot_as_multiturn --log_samples"
-
+export HF_HOME_DATASETS=/scratch/huggingface/datasets
 export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 export HF_HOME="/scratch/huggingface"
 export HF_TOKEN="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"
 
-# Use unbuffered Python output for better logging
-export PYTHONUNBUFFERED=1
+echo "Starting AIME Evaluation Suite"
+echo "==============================="
 
-if [ "$MODE" = "baseline" ]; then
-    mkdir -p "logs/aime_benchmark/baseline/"
-    
-    # Run non-70B models sequentially for baseline on single GPU
-    (
-        MODEL="meta-llama/Llama-3.2-3B-Instruct"
-        CUDA_VISIBLE_DEVICES=0  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --output "./logs/aime_benchmark/baseline/${MODEL##*/}_aime25.jsonl" > "logs/aime_benchmark/baseline/${MODEL##*/}_aime25.txt" 2>&1
-        
-        MODEL="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
-        CUDA_VISIBLE_DEVICES=0  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --output "./logs/aime_benchmark/baseline/${MODEL##*/}_aime25.jsonl" > "logs/aime_benchmark/baseline/${MODEL##*/}_aime25.txt" 2>&1
-        
-        MODEL="Qwen/Qwen3-4B-Thinking-2507"
-        CUDA_VISIBLE_DEVICES=0 python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --output "./logs/aime_benchmark/baseline/${MODEL##*/}_aime25.jsonl" > "logs/aime_benchmark/baseline/${MODEL##*/}_aime25.txt" 2>&1
-    ) &
-    
-    # Run 70B model for baseline on 2 GPUs
-    MODEL="meta-llama/Llama-3.3-70B-Instruct"
-    CUDA_VISIBLE_DEVICES=1,2  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --output "./logs/aime_benchmark/baseline/${MODEL##*/}_aime25.jsonl" > "logs/aime_benchmark/baseline/${MODEL##*/}_aime25.txt" 2>&1 &
+mkdir -p "logs/aime_benchmark"
 
-elif [ "$MODE" = "all" ]; then
-    mkdir -p "logs/aime_benchmark/baseline/"
-    mkdir -p "logs/aime_benchmark/kvquant/"
-    mkdir -p "logs/aime_benchmark/fp4/"
-    
-    # Run non-70B models sequentially for baseline and kvquant on single GPU
-    (
-        # Baseline non-70B models
-        MODEL="meta-llama/Llama-3.2-3B-Instruct"
-        CUDA_VISIBLE_DEVICES=0  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --output "./logs/aime_benchmark/baseline/${MODEL##*/}_aime25.jsonl" > "logs/aime_benchmark/baseline/${MODEL##*/}_aime25.txt" 2>&1
-        
-        MODEL="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
-        CUDA_VISIBLE_DEVICES=0  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --output "./logs/aime_benchmark/baseline/${MODEL##*/}_aime25.jsonl" > "logs/aime_benchmark/baseline/${MODEL##*/}_aime25.txt" 2>&1
-        
-        MODEL="Qwen/Qwen3-4B-Thinking-2507"
-        CUDA_VISIBLE_DEVICES=0 python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --output "./logs/aime_benchmark/baseline/${MODEL##*/}_aime25.jsonl" > "logs/aime_benchmark/baseline/${MODEL##*/}_aime25.txt" 2>&1
-        
-        # KVquant non-70B models
-        MODEL="meta-llama/Llama-3.2-3B-Instruct"
-        CUDA_VISIBLE_DEVICES=0  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --kvquant --output "./logs/aime_benchmark/kvquant/${MODEL##*/}_aime25.jsonl" > "logs/aime_benchmark/kvquant/${MODEL##*/}_aime25.txt" 2>&1
-        
-        MODEL="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
-        CUDA_VISIBLE_DEVICES=0  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --kvquant --output "./logs/aime_benchmark/kvquant/${MODEL##*/}_aime25.jsonl" > "logs/aime_benchmark/kvquant/${MODEL##*/}_aime25.txt" 2>&1
-        
-        MODEL="Qwen/Qwen3-4B-Thinking-2507"
-        CUDA_VISIBLE_DEVICES=0  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --kvquant --output "./logs/aime_benchmark/kvquant/${MODEL##*/}_aime25.jsonl" > "logs/aime_benchmark/kvquant/${MODEL##*/}_aime25.txt" 2>&1
-    ) &
-    
-    # Run 70B models sequentially for baseline and kvquant on 2 GPUs
-    (
-        # Baseline 70B model
-        MODEL="meta-llama/Llama-3.3-70B-Instruct"
-        CUDA_VISIBLE_DEVICES=1,2  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --output "./logs/aime_benchmark/baseline/${MODEL##*/}_aime25.jsonl" > "logs/aime_benchmark/baseline/${MODEL##*/}_aime25.txt" 2>&1
-        
-        # KVquant 70B model
-        MODEL="meta-llama/Llama-3.3-70B-Instruct"
-        CUDA_VISIBLE_DEVICES=1,2  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --kvquant --output "./logs/aime_benchmark/kvquant/${MODEL##*/}_aime25.jsonl" > "logs/aime_benchmark/kvquant/${MODEL##*/}_aime25.txt" 2>&1
-    ) &
-    
-    # FP4 70B model on 2 GPUs
-    MODEL="meta-llama/Llama-3.3-70B-Instruct"
-    CUDA_VISIBLE_DEVICES=3,4  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --quantize --output "./logs/aime_benchmark/fp4/${MODEL##*/}_aime25.jsonl" > "logs/aime_benchmark/fp4/${MODEL##*/}_aime25.txt" 2>&1 &
-    
-    # FP4 non-70B models on 3 different GPUs
-    MODEL="meta-llama/Llama-3.2-3B-Instruct"
-    CUDA_VISIBLE_DEVICES=5  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --quantize --output "./logs/aime_benchmark/fp4/${MODEL##*/}_aime25.jsonl" > "logs/aime_benchmark/fp4/${MODEL##*/}_aime25.txt" 2>&1 &
-    
-    MODEL="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
-    CUDA_VISIBLE_DEVICES=6  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --quantize --output "./logs/aime_benchmark/fp4/${MODEL##*/}_aime25.jsonl" > "logs/aime_benchmark/fp4/${MODEL##*/}_aime25.txt" 2>&1 &
-    
-    MODEL="Qwen/Qwen3-4B-Thinking-2507"
-    CUDA_VISIBLE_DEVICES=7  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --quantize --output "./logs/aime_benchmark/fp4/${MODEL##*/}_aime25.jsonl" > "logs/aime_benchmark/fp4/${MODEL##*/}_aime25.txt" 2>&1 &
+# Small Models (4B-8B): Single GPU, optimized batch size
+echo "[1/6] Qwen3-4B-Thinking (AIME24)"
+CUDA_VISIBLE_DEVICES=0 python lmeval_main.py "Qwen/Qwen3-4B-Thinking-2507" --task aime24 --num_repeats 10 --batch_size 8&> logs/aime_benchmark/aime24_qwen3_4b_thinking_2507.txt&
 
-elif [ "$MODE" = "fp4" ]; then
-    mkdir -p "logs/aime_benchmark/fp4/"
-    
-    #FP4
-    
-    # FP4 70B model on 2 GPUs
-    MODEL="meta-llama/Llama-3.3-70B-Instruct"
-    CUDA_VISIBLE_DEVICES=3,4  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --quantize --output "./logs/aime_benchmark/fp4/${MODEL##*/}_aime25.jsonl" > "logs/aime_benchmark/fp4/${MODEL##*/}_aime25.txt" 2>&1 &
-    
-    # FP4 non-70B models on 3 different GPUs
-    MODEL="meta-llama/Llama-3.2-3B-Instruct"
-    CUDA_VISIBLE_DEVICES=5  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --quantize --output "./logs/aime_benchmark/fp4/${MODEL##*/}_aime25.jsonl" > "logs/aime_benchmark/fp4/${MODEL##*/}_aime25.txt" 2>&1 &
-    
-    MODEL="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
-    CUDA_VISIBLE_DEVICES=6  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --quantize --output "./logs/aime_benchmark/fp4/${MODEL##*/}_aime25.jsonl" > "logs/aime_benchmark/fp4/${MODEL##*/}_aime25.txt" 2>&1 &
-    
-    MODEL="Qwen/Qwen3-4B-Thinking-2507"
-    CUDA_VISIBLE_DEVICES=7  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --quantize --output "./logs/aime_benchmark/fp4/${MODEL##*/}_aime25.jsonl" > "logs/aime_benchmark/fp4/${MODEL##*/}_aime25.txt" 2>&1 &
+# echo "[2/6] Qwen3-8B (AIME24)"
+# CUDA_VISIBLE_DEVICES=1 python lmeval_main.py "Qwen/Qwen3-8B" --task aime24 --num_repeats 10 --batch_size 8&> logs/aime_benchmark/aime24_qwen3_8b.txt&
 
-elif [ "$MODE" = "kvquant" ]; then
-    mkdir -p "logs/aime_benchmark/kvquant/"
-    
-    #KVquant
-    
-    # Run non-70B models sequentially on single GPU
-    (
-        MODEL="meta-llama/Llama-3.2-3B-Instruct"
-        CUDA_VISIBLE_DEVICES=0  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --kvquant --output "./logs/aime_benchmark/kvquant/${MODEL##*/}_aime25.jsonl" > "logs/aime_benchmark/kvquant/${MODEL##*/}_aime25.txt" 2>&1
-        
-        MODEL="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
-        CUDA_VISIBLE_DEVICES=0  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --kvquant --output "./logs/aime_benchmark/kvquant/${MODEL##*/}_aime25.jsonl" > "logs/aime_benchmark/kvquant/${MODEL##*/}_aime25.txt" 2>&1
-        
-        MODEL="Qwen/Qwen3-4B-Thinking-2507"
-        CUDA_VISIBLE_DEVICES=0  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --kvquant --output "./logs/aime_benchmark/kvquant/${MODEL##*/}_aime25.jsonl" > "logs/aime_benchmark/kvquant/${MODEL##*/}_aime25.txt" 2>&1
-    ) &
-    
-    # Run 70B model on 2 GPUs
-    MODEL="meta-llama/Llama-3.3-70B-Instruct"
-    CUDA_VISIBLE_DEVICES=1,2  python -u lmeval_main.py --model "${MODEL}" ${SUFFIX_CMD} --kvquant --output "./logs/aime_benchmark/kvquant/${MODEL##*/}_aime25.jsonl" > "logs/aime_benchmark/kvquant/${MODEL##*/}_aime25.txt" 2>&1 &
-fi
+# echo "[3/6] Llama-3.1-8B (AIME24)"
+# CUDA_VISIBLE_DEVICES=1 python lmeval_main.py "meta-llama/Llama-3.1-8B-Instruct" --task aime24 --num_repeats 10 --batch_size 4&> logs/aime_benchmark/aime24_llama3_1_8b_instruct.txt&
 
-# Wait for all background jobs to complete
-wait
-echo "All benchmark runs completed!"
+# Medium Model (14B): Multi-GPU
+# echo "[4/6] Qwen3-14B (AIME24)"
+# CUDA_VISIBLE_DEVICES=2 python lmeval_main.py "Qwen/Qwen3-14B" --task aime24 --num_repeats 10 --batch_size  4 &> logs/aime_benchmark/aime24_qwen3_14b.txt&
+
+
+# echo "[2/6] Qwen3-8B (AIME25)"
+# CUDA_VISIBLE_DEVICES=3 python lmeval_main.py "Qwen/Qwen3-8B" --task aime25 --num_repeats 10 --batch_size 8&> logs/aime_benchmark/aime25_qwen3_8b.txt&
+
+# # AIME25 Evaluations
+# echo "[5/6] Qwen3-4B-Thinking (AIME25)"
+# CUDA_VISIBLE_DEVICES=4 python lmeval_main.py "Qwen/Qwen3-4B-Thinking-2507" --task aime25 --num_repeats 10 --batch_size  8&> logs/aime_benchmark/aime25_qwen3_4b_thinking_2507.txt&
+
+# echo "[6/6] Qwen3-14B (AIME25)"
+# CUDA_VISIBLE_DEVICES=5 python lmeval_main.py "Qwen/Qwen3-14B" --task aime25 --num_repeats 10 --batch_size 4&> logs/aime_benchmark/aime25_qwen3_14b.txt&
+
+echo "==============================="
+echo "AIME Evaluation Suite Complete!"
+echo "==============================="
+
+
