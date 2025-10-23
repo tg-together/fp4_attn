@@ -4,7 +4,7 @@ import triton.language as tl
 from triton.language.extra import libdevice
 import sys
 sys.path.append('/workspace/fp4_attn/fast_fp4')
-import nvfp4sim
+# import nvfp4sim
 
 @triton.jit
 def f32_as_u32(x: tl.tensor):
@@ -155,74 +155,74 @@ def quantize_single(x: torch.tensor, search: bool = False):
     reconstructed_vals = output.reshape(b, h, n, d)
     return reconstructed_vals
 
-def comparison(x, search=False):
-    """Single nvfp4 quantization without global scaling factor.
-    Follows the simulation approach from fp4_quant_utils.py but accepts 4D input.
-    Ignores global_sf for now - just does basic quantize/dequantize."""
-    BLOCK_SIZE = 16
+# def comparison(x, search=False):
+#     """Single nvfp4 quantization without global scaling factor.
+#     Follows the simulation approach from fp4_quant_utils.py but accepts 4D input.
+#     Ignores global_sf for now - just does basic quantize/dequantize."""
+#     BLOCK_SIZE = 16
     
-    # Expect 4D input: (b, h, n, d)
-    assert x.dim() == 4, "Input must be 4D: (b, h, n, d)"
-    b, h, n_orig, d_orig = x.shape
+#     # Expect 4D input: (b, h, n, d)
+#     assert x.dim() == 4, "Input must be 4D: (b, h, n, d)"
+#     b, h, n_orig, d_orig = x.shape
     
-    x = x.to(torch.float32)
+#     x = x.to(torch.float32)
     
-    # Reshape to (b*h, n, d) for easier processing
-    x = x.reshape(b * h, n_orig, d_orig)
+#     # Reshape to (b*h, n, d) for easier processing
+#     x = x.reshape(b * h, n_orig, d_orig)
     
-    # Pad columns to be divisible by BLOCK_SIZE
-    pad_cols = (BLOCK_SIZE - d_orig % BLOCK_SIZE) % BLOCK_SIZE
-    # Pad rows to be even (required by nvfp4sim)
-    pad_rows = n_orig % 2
+#     # Pad columns to be divisible by BLOCK_SIZE
+#     pad_cols = (BLOCK_SIZE - d_orig % BLOCK_SIZE) % BLOCK_SIZE
+#     # Pad rows to be even (required by nvfp4sim)
+#     pad_rows = n_orig % 2
     
-    if pad_cols != 0 or pad_rows != 0:
-        x = torch.nn.functional.pad(x, (0, pad_cols, 0, pad_rows), value=0.0)
+#     if pad_cols != 0 or pad_rows != 0:
+#         x = torch.nn.functional.pad(x, (0, pad_cols, 0, pad_rows), value=0.0)
     
-    bh, n, d = x.shape
-    x = x.contiguous()
+#     bh, n, d = x.shape
+#     x = x.contiguous()
     
-    # Reshape to (bh * n * (d // BLOCK_SIZE), BLOCK_SIZE) for nvfp4sim
-    x = x.view(bh * n * (d // BLOCK_SIZE), BLOCK_SIZE)
-    M = x.shape[0]
+#     # Reshape to (bh * n * (d // BLOCK_SIZE), BLOCK_SIZE) for nvfp4sim
+#     x = x.view(bh * n * (d // BLOCK_SIZE), BLOCK_SIZE)
+#     M = x.shape[0]
     
-    # Allocate storage for quantized data and scales
-    quantized_data = torch.empty(M, dtype=torch.int64, device=x.device)
-    scales = torch.empty(M, dtype=torch.float8_e4m3fn, device=x.device)
+#     # Allocate storage for quantized data and scales
+#     quantized_data = torch.empty(M, dtype=torch.int64, device=x.device)
+#     scales = torch.empty(M, dtype=torch.float8_e4m3fn, device=x.device)
     
-    # Quantize using nvfp4sim
-    if search:
-        nvfp4sim.f32_to_nvf4(quantized_data, scales, x)
-    else:
-        nvfp4sim.f32_to_nvf4_nosearch(quantized_data, scales, x)
+#     # Quantize using nvfp4sim
+#     if search:
+#         nvfp4sim.f32_to_nvf4(quantized_data, scales, x)
+#     else:
+#         nvfp4sim.f32_to_nvf4_nosearch(quantized_data, scales, x)
     
-    # Dequantize back to f32
-    reconstructed_f32 = torch.empty(M, BLOCK_SIZE, dtype=torch.float32, device=x.device)
-    nvfp4sim.nvf4_to_f32(reconstructed_f32, quantized_data, scales)
+#     # Dequantize back to f32
+#     reconstructed_f32 = torch.empty(M, BLOCK_SIZE, dtype=torch.float32, device=x.device)
+#     nvfp4sim.nvf4_to_f32(reconstructed_f32, quantized_data, scales)
     
-    # Reshape back to (bh, n, d)
-    reconstructed_f32 = reconstructed_f32.view(bh, n, d)
+#     # Reshape back to (bh, n, d)
+#     reconstructed_f32 = reconstructed_f32.view(bh, n, d)
     
-    # Remove padding
-    if n != n_orig or d != d_orig:
-        reconstructed_f32 = reconstructed_f32[:, :n_orig, :d_orig]
+#     # Remove padding
+#     if n != n_orig or d != d_orig:
+#         reconstructed_f32 = reconstructed_f32[:, :n_orig, :d_orig]
     
-    # Reshape back to (b, h, n, d)
-    reconstructed_f32 = reconstructed_f32.reshape(b, h, n_orig, d_orig)
+#     # Reshape back to (b, h, n, d)
+#     reconstructed_f32 = reconstructed_f32.reshape(b, h, n_orig, d_orig)
     
-    return reconstructed_f32
+#     return reconstructed_f32
 
-@triton.testing.perf_report(
-    triton.testing.Benchmark(
-        x_names=['N'],  # argument names to use as an x-axis for the plot
-        x_vals=[128 * i for i in range(2, 100)],  # different possible values for `x_name`
-        line_arg='provider',  # argument name whose value corresponds to a different line in the plot
-        line_vals=['triton', 'nvfp4sim'],  # possible values for `line_arg``
-        line_names=["Triton", "Nvfp4sim"],  # label name for the lines
-        styles=[('blue', '-'), ('green', '-')],  # line styles
-        ylabel="ms",  # label name for the y-axis
-        plot_name="quantize-sim-performance-latency",  # name for the plot. Used also as a file name for saving the plot.
-        args={'B': 1, 'H': 8, 'D': 128},  # values for function arguments not in `x_names` and `y_name`
-    ))
+# @triton.testing.perf_report(
+#     triton.testing.Benchmark(
+#         x_names=['N'],  # argument names to use as an x-axis for the plot
+#         x_vals=[128 * i for i in range(2, 100)],  # different possible values for `x_name`
+#         line_arg='provider',  # argument name whose value corresponds to a different line in the plot
+#         line_vals=['triton', 'nvfp4sim'],  # possible values for `line_arg``
+#         line_names=["Triton", "Nvfp4sim"],  # label name for the lines
+#         styles=[('blue', '-'), ('green', '-')],  # line styles
+#         ylabel="ms",  # label name for the y-axis
+#         plot_name="quantize-sim-performance-latency",  # name for the plot. Used also as a file name for saving the plot.
+#         args={'B': 1, 'H': 8, 'D': 128},  # values for function arguments not in `x_names` and `y_name`
+#     ))
 def benchmark(B, H, N, D, provider):
     x = torch.randn(B, H, N, D, device=torch.device('cuda:0'), dtype=torch.float32)
     if provider == 'triton':
@@ -249,8 +249,8 @@ def benchmark_search(B, H, N, D, provider):
     x = torch.randn(B, H, N, D, device=torch.device('cuda:0'), dtype=torch.float32)
     if provider == 'triton':
         ms = triton.testing.do_bench(lambda: quantize_single(x, search=True))
-    if provider == 'nvfp4sim':
-        ms = triton.testing.do_bench(lambda: comparison(x, search=True))
+    # if provider == 'nvfp4sim':
+    #     ms = triton.testing.do_bench(lambda: comparison(x, search=True))
     gbps = lambda ms: 2 * x.numel() * x.element_size() * 1e-9 / (ms * 1e-3)
     return gbps(ms)
 

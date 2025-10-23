@@ -14,7 +14,7 @@ from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 from transformers.models.llama.modeling_llama import apply_rotary_pos_emb, eager_attention_forward, repeat_kv
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.utils import ModelOutput
-from fp4_quant_utils import FP4Quantizer
+# from fp4_quant_utils import FP4Quantizer
 from quant_kernel.nvfp4_fast import FastFP4Quantizer
 import time
 import math
