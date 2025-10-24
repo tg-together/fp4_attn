@@ -24,3 +24,5 @@ rm -rf ./third_party/lm-eval/lm_eval/tasks/gsm8k_platinum
 cp -r ./tasks/aime/ ./tasks/gpqa/ ./tasks/gsm8k/ ./tasks/gsm8k_platinum/ ./third_party/lm-eval/lm_eval/tasks/
 
 python -m pip install -e third_party/lm-eval
+
+pip install transformers==4.55.4
