@@ -137,6 +137,13 @@ Available tasks:
         help="Number of few-shot examples (overrides task default). Use 5 for GPQA standard evaluation"
     )
 
+    parser.add_argument(
+        "--repeat_id",
+        type=int,
+        default=None,
+        help="Run a specific repeat ID (0-based). When set, num_repeats is ignored and only this repeat is run."
+    )
+
     return parser
 
 
@@ -165,7 +172,9 @@ def main():
     print(f"Task: {args.task}")
     print(f"Batch Size: {args.batch_size}")
     print(f"Device Map: {args.device_map}")
-    if args.num_repeats:
+    if args.repeat_id is not None:
+        print(f"Repeat ID: {args.repeat_id} (running single repeat)")
+    elif args.num_repeats:
         print(f"Num Repeats: {args.num_repeats}")
     else:
         print(f"Num Repeats: Will read from task YAML config (default: 1)")
@@ -209,7 +218,8 @@ def main():
             debug=args.debug,
             num_repeats=args.num_repeats,
             batch_size=args.batch_size,
-            num_fewshot=args.num_fewshot
+            num_fewshot=args.num_fewshot,
+            repeat_id=args.repeat_id
         )
     except KeyboardInterrupt:
         print("\n\n[Interrupted] Evaluation interrupted by user (Ctrl+C)")

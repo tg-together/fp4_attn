@@ -175,7 +175,8 @@ def run_evaluation_repeats(
     base_random_seed: int = 0,
     base_numpy_seed: int = 1234,
     base_torch_seed: int = 1234,
-    base_fewshot_seed: int = 1234
+    base_fewshot_seed: int = 1234,
+    repeat_id: Optional[int] = None
 ) -> List[Dict]:
     """
     Run evaluation for remaining repeats and save results.
@@ -198,6 +199,7 @@ def run_evaluation_repeats(
         base_numpy_seed: Base random seed for numpy (default: 1234)
         base_torch_seed: Base random seed for torch (default: 1234)
         base_fewshot_seed: Base random seed for fewshot sampler (default: 1234)
+        repeat_id: If specified, run only this specific repeat ID (0-based)
 
     Returns:
         Updated list of all results (same as all_results parameter)
@@ -222,7 +224,15 @@ def run_evaluation_repeats(
     if needs_unsafe_code:
         print(f"Task requires code execution, setting confirm_run_unsafe_code=True")
 
-    for repeat_idx in range(num_repeats):
+    # Determine which repeat(s) to run
+    if repeat_id is not None:
+        # Run only the specified repeat
+        repeats_to_run = [repeat_id]
+    else:
+        # Run all repeats that aren't completed
+        repeats_to_run = range(num_repeats)
+    
+    for repeat_idx in repeats_to_run:
         if repeat_idx in completed_repeats:
             continue
 
@@ -363,7 +373,8 @@ def eval_model_baseline(
     debug: bool = False,
     num_repeats: Optional[int] = None,
     batch_size: int = 8,
-    num_fewshot: Optional[int] = None
+    num_fewshot: Optional[int] = None,
+    repeat_id: Optional[int] = None
 ):
     """
     Evaluate model on downstream tasks with baseline FP16 (no quantization).
@@ -378,23 +389,29 @@ def eval_model_baseline(
                      If None, will try to read from task's YAML config. If not found, defaults to 1.
         batch_size: Batch size for inference (default: 8).
         num_fewshot: Number of few-shot examples (overrides task default). Use 5 for GPQA standard evaluation.
+        repeat_id: If specified, run only this specific repeat ID (0-based) and ignore num_repeats.
     """
     from lm_eval.models.huggingface import HFLM
     from lm_eval.tasks import TaskManager
 
     lm = HFLM(model, batch_size=batch_size)
 
-    # If num_repeats is not specified, try to read from task config
-    if num_repeats is None:
-        try:
-            task_manager = TaskManager()
-            task_dict = task_manager.load_task_or_group([task])
-            task_obj = task_dict[task][0] if isinstance(task_dict[task], list) else task_dict[task]
-            num_repeats = getattr(task_obj.config, 'repeats', 1)
-            print(f"[Info] Using repeats={num_repeats} from task YAML config")
-        except Exception as e:
-            print(f"[Warning] Could not read repeats from task config: {e}. Using default repeats=1")
-            num_repeats = 1
+    # Handle repeat_id: if specified, run only that specific repeat
+    if repeat_id is not None:
+        # When repeat_id is specified, we only run that one repeat
+        num_repeats = 1
+    else:
+        # If num_repeats is not specified, try to read from task config
+        if num_repeats is None:
+            try:
+                task_manager = TaskManager()
+                task_dict = task_manager.load_task_or_group([task])
+                task_obj = task_dict[task][0] if isinstance(task_dict[task], list) else task_dict[task]
+                num_repeats = getattr(task_obj.config, 'repeats', 1)
+                print(f"[Info] Using repeats={num_repeats} from task YAML config")
+            except Exception as e:
+                print(f"[Warning] Could not read repeats from task config: {e}. Using default repeats=1")
+                num_repeats = 1
 
     # Simplified model configs (no RoCK-KV parameters)
     model_configs = {
@@ -508,9 +525,23 @@ def eval_model_baseline(
     if not os.path.exists(file_dir):
         os.makedirs(file_dir, exist_ok=True)
 
-    # Check which repeats are already completed (for checkpoint resumption)
-    completed_repeats, all_results = load_completed_repeats(file_dir, file_name, num_repeats)
-    all_completed = print_checkpoint_status(completed_repeats, num_repeats)
+    # Handle checkpoint loading differently for repeat_id mode
+    if repeat_id is not None:
+        # For single repeat mode, check if this specific repeat is already done
+        repeat_file = f"{file_dir}/{file_name}_repeat_{repeat_id}.json"
+        if os.path.exists(repeat_file):
+            print(f"[Checkpoint] Repeat {repeat_id} already completed: {repeat_file}")
+            print("[Info] Skipping evaluation. Use a different repeat_id or delete the file to re-run.")
+            return
+        
+        # No completed repeats to consider for this single run
+        completed_repeats = []
+        all_results = []
+        all_completed = False
+    else:
+        # Normal mode: check all repeats
+        completed_repeats, all_results = load_completed_repeats(file_dir, file_name, num_repeats)
+        all_completed = print_checkpoint_status(completed_repeats, num_repeats)
 
     # Run evaluations for remaining repeats (skip if all completed)
     if not all_completed:
@@ -527,18 +558,22 @@ def eval_model_baseline(
             num_repeats=num_repeats,
             completed_repeats=completed_repeats,
             all_results=all_results,
-            batch_size=batch_size
+            batch_size=batch_size,
+            repeat_id=repeat_id
         )
 
-    # Generate summary statistics across all repeats
-    print(f"\n{'='*80}")
-    print("Generating summary statistics...")
-    print(f"{'='*80}\n")
+    # Generate summary statistics only if we ran multiple repeats (not in single repeat mode)
+    if repeat_id is None:
+        print(f"\n{'='*80}")
+        print("Generating summary statistics...")
+        print(f"{'='*80}\n")
 
-    summary = generate_summary_statistics(all_results, task, model_configs, num_repeats)
+        summary = generate_summary_statistics(all_results, task, model_configs, num_repeats)
 
-    # Save summary file
-    summary_file = "{}/{}_summary.json".format(file_dir, file_name)
-    with open(summary_file, "w") as f:
-        json.dump(summary, f, indent=4)
-    print(f"[Saved] Summary statistics: {summary_file}")
+        # Save summary file
+        summary_file = "{}/{}_summary.json".format(file_dir, file_name)
+        with open(summary_file, "w") as f:
+            json.dump(summary, f, indent=4)
+        print(f"[Saved] Summary statistics: {summary_file}")
+    else:
+        print(f"\n[Info] Single repeat mode (repeat_id={repeat_id}), skipping summary generation")
