@@ -186,8 +186,10 @@ def get_block_indices(T, t_block):
 
     last_slice = slice(last_start, T) if is_last_incomplete else None
 
-    return first_slice, middle_slice, last_slice
+    if T<=t_block:
+        last_slice = None
 
+    return first_slice, middle_slice, last_slice
 def quantize_q(module, q_orig, dual=True):
     if not module.q_quant_log:
         print("Quantizing Q")   
@@ -488,16 +490,20 @@ def llama_fp4_attention_forward(
 
         else: #Decode stage for this layer
 
-            if self.unquantized_cache["K"] is None or self.unquantized_cache["K"].shape[2]==self.attention_block_size:
-                self.unquantized_cache["K"] = key_states
-                self.unquantized_cache["V"] = value_states
+            if self.first_block["K"].shape[2]<self.attention_block_size:
+                self.first_block["K"] = torch.cat([self.first_block["K"], key_states], dim=2)
+                self.first_block["V"] = torch.cat([self.first_block["V"], value_states], dim=2)
             else:
-                self.unquantized_cache["K"] = torch.cat([self.unquantized_cache["K"], key_states], dim=2)
-                self.unquantized_cache["V"] = torch.cat([self.unquantized_cache["V"], value_states], dim=2)
 
+                if self.unquantized_cache["K"] is None or self.unquantized_cache["K"].shape[2]==self.attention_block_size:
+                    self.unquantized_cache["K"] = key_states
+                    self.unquantized_cache["V"] = value_states
+                else:
+                    self.unquantized_cache["K"] = torch.cat([self.unquantized_cache["K"], key_states], dim=2)
+                    self.unquantized_cache["V"] = torch.cat([self.unquantized_cache["V"], value_states], dim=2)
 
-            self.mode="decode"          
-        
+            self.mode="decode"  
+
         Qq_hi, Qq_lo, Qs_hi, Qs_lo = quantize_q(self, query_states, dual=self.use_dual_quant_q)
         query_states = Qq_hi*Qs_hi + Qq_lo*Qs_lo 
 

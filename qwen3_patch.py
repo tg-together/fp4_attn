@@ -185,6 +185,9 @@ def get_block_indices(T, t_block):
 
     last_slice = slice(last_start, T) if is_last_incomplete else None
 
+    if T<=t_block:
+        last_slice = None
+
     return first_slice, middle_slice, last_slice
 
 
@@ -334,7 +337,6 @@ def flash_style_attention(
             q=q_blk
             k=k_blk
             v=v_blk
-
             if module.layer_idx != 0 and hasattr(module, 'quantize') and module.quantize and module.fp_mask:
 
                 if module.mode=="prefill" and (k_block_idx==0 or k_block_idx==q_block_idx):
@@ -347,7 +349,7 @@ def flash_style_attention(
                     q=q_blk_uq
                     v=repeat_kv(module.first_block["V"], module.num_key_value_groups) if module.first_block["V"].shape[1]!=q_blk_uq.shape[1] else module.first_block["V"]
 
-                if module.mode=="decode" and k_end==Klen:
+                if module.mode=="decode" and k_end==Klen and not k_block_idx==0:
                     k=repeat_kv(module.unquantized_cache["K"], module.num_key_value_groups) if module.unquantized_cache["K"].shape[1]!=q_blk_uq.shape[1] else module.unquantized_cache["K"]
                     q=q_blk_uq
                     v=repeat_kv(module.unquantized_cache["V"], module.num_key_value_groups) if module.unquantized_cache["V"].shape[1]!=q_blk_uq.shape[1] else module.unquantized_cache["V"]
@@ -469,7 +471,6 @@ def qwen3_fp4_attention_forward(
         query_states_uq, key_states_uq , value_states_uq = query_states, key_states, value_states
         
 
-
         if past_key_value is None or len(past_key_value)<self.config.num_hidden_layers: #Prefill stage for this layer
 
             first_slice, middle_slice, remaining_slice = get_block_indices(T_kv, self.attention_block_size)
@@ -488,17 +489,21 @@ def qwen3_fp4_attention_forward(
 
         else: #Decode stage for this layer
 
-            if self.unquantized_cache["K"] is None or self.unquantized_cache["K"].shape[2]==self.attention_block_size:
-                self.unquantized_cache["K"] = key_states
-                self.unquantized_cache["V"] = value_states
+            if self.first_block["K"].shape[2]<self.attention_block_size:
+                self.first_block["K"] = torch.cat([self.first_block["K"], key_states], dim=2)
+                self.first_block["V"] = torch.cat([self.first_block["V"], value_states], dim=2)
             else:
-                self.unquantized_cache["K"] = torch.cat([self.unquantized_cache["K"], key_states], dim=2)
-                self.unquantized_cache["V"] = torch.cat([self.unquantized_cache["V"], value_states], dim=2)
+
+                if self.unquantized_cache["K"] is None or self.unquantized_cache["K"].shape[2]==self.attention_block_size:
+                    self.unquantized_cache["K"] = key_states
+                    self.unquantized_cache["V"] = value_states
+                else:
+                    self.unquantized_cache["K"] = torch.cat([self.unquantized_cache["K"], key_states], dim=2)
+                    self.unquantized_cache["V"] = torch.cat([self.unquantized_cache["V"], value_states], dim=2)
 
 
-            self.mode="decode"           
-
-        
+            self.mode="decode"  
+                 
         Qq_hi, Qq_lo, Qs_hi, Qs_lo = quantize_q(self, query_states, dual=self.use_dual_quant_q)
         query_states = Qq_hi*Qs_hi + Qq_lo*Qs_lo 
 
