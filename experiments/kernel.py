@@ -81,7 +81,7 @@ def quantize_to_fp4_single_search(x: tl.tensor, S_BLOCK_SIZE: tl.constexpr, BLOC
         new_xscale_fp8 = (xscale).to(tl.float8e4nv)
         best_xscale = tl.where(better[:, None], new_xscale_fp8, best_xscale)
         best_offset = tl.where(better[:, None], offset_val.to(tl.int8), best_offset)
-    return best_quantized, best_xscale, best_offset
+    return best_quantized, xscale_f8, best_offset
 
 @triton.autotune(
     configs=[
@@ -200,7 +200,7 @@ def create_outlier_sample(B, H, N, D, mean=0.0, std=1.0, scale_factor=5.0):
 
 
 if __name__ == "__main__":
-    BLOCK_SIZE = 32
+    BLOCK_SIZE = 16
     x = get_normal_sample(64, 64, 4096, BLOCK_SIZE, mean=0.0, std=5.0)
     min_range, max_range = -7, 8
     reconstructed_vals, scale_offset_distribution, _ = quantize_single(x, min_range=min_range, max_range=max_range, BLOCK_SIZE=BLOCK_SIZE)
@@ -285,5 +285,47 @@ if __name__ == "__main__":
     plt.tight_layout()
     plt.savefig(f'scale_offset_2d_BLOCK_SIZE_{BLOCK_SIZE}.png', dpi=150)
     print("2D histogram saved to scale_offset_2d.png")
+    plt.show()
+
+    # 2D histogram grid: mantissa bits vs offset for different outlier scale factors
+    scale_factors = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    
+    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+    axes = axes.flatten()
+    
+    for idx, scale_factor in enumerate(scale_factors):
+        x = create_outlier_sample(64, 64, 4096, BLOCK_SIZE, mean=0.0, std=1.0, scale_factor=scale_factor)
+        _, scale_offset_distribution, scales = quantize_single(x, min_range=min_range, max_range=max_range, BLOCK_SIZE=BLOCK_SIZE)
+        
+        # Extract mantissa bits from FP8 scales
+        scales_fp8 = scales.to(torch.float8_e4m3fn)
+        scales_uint8 = scales_fp8.view(torch.uint8).flatten()
+        mantissa_bits = (scales_uint8 & 0b00000111).long()
+        offsets = scale_offset_distribution.flatten().long()
+        
+        # Create 2D histogram
+        num_mantissa_vals = 8
+        num_offset_vals = max_range - min_range + 1
+        hist_2d = torch.zeros((num_mantissa_vals, num_offset_vals), device='cuda:0')
+        
+        for i in range(num_mantissa_vals):
+            for j in range(num_offset_vals):
+                offset_val = min_range + j
+                mask = (mantissa_bits == i) & (offsets == offset_val)
+                hist_2d[i, j] = mask.sum()
+        
+        # Normalize to get probabilities
+        hist_2d = hist_2d / hist_2d.sum()
+        
+        im = axes[idx].imshow(hist_2d.cpu().numpy(), aspect='auto', origin='lower', 
+                              extent=[min_range, max_range + 1, 0, 8], cmap='viridis')
+        axes[idx].set_xlabel('offset from vlim scale')
+        axes[idx].set_ylabel('original vlim scale mantissa')
+        axes[idx].set_title(f'Scale Factor={scale_factor}')
+        fig.colorbar(im, ax=axes[idx])
+    
+    plt.tight_layout()
+    plt.savefig(f'scale_offset_2d_outliers_BLOCK_SIZE_{BLOCK_SIZE}.png', dpi=150)
+    print(f"2D outlier histograms saved to scale_offset_2d_outliers_BLOCK_SIZE_{BLOCK_SIZE}.png")
     plt.show()
 
