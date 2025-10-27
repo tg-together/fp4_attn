@@ -66,7 +66,7 @@ def quantize_to_fp4_single_search(x: tl.tensor, S_BLOCK_SIZE: tl.constexpr, BLOC
     max_abs_x = tl.clamp(max_abs_x, 1e-10 / 6.0, 448.0)
     xscale_f8 = max_abs_x.to(tl.float8e4nv, fp_downcast_rounding="rtne")[:, None]
     best_loss = tl.full((S_BLOCK_SIZE,), float("inf"), dtype=tl.float32)
-    best_quantized = tl.zeros((S_BLOCK_SIZE, BLOCK_SIZE), dtype=tl.uint8)
+    best_quantized = tl.zeros((S_BLOCK_SIZE, 16), dtype=tl.uint8)
     best_xscale = tl.zeros((S_BLOCK_SIZE,1), dtype=tl.float8e4nv)
     best_offset = tl.zeros((S_BLOCK_SIZE,1), dtype=tl.int8)
     for offset_val in range(min_range, max_range + 1, 1):
@@ -146,8 +146,9 @@ def quant_kernel(
     tl.store(scales_ptr+ s_offset + block, scales, mask=mask)
 
 
-def quantize_single(x: torch.tensor, min_range: int = -7, max_range: int = 8, BLOCK_SIZE: int = 16):
+def quantize_single(x: torch.tensor, min_range: int = -7, max_range: int = 8):
     b, h, n, d = x.shape
+    BLOCK_SIZE = 16
     assert d % BLOCK_SIZE == 0
 
     x = x.reshape(b * h, n * (d // BLOCK_SIZE), BLOCK_SIZE).contiguous()
@@ -200,10 +201,9 @@ def create_outlier_sample(B, H, N, D, mean=0.0, std=1.0, scale_factor=5.0):
 
 
 if __name__ == "__main__":
-    BLOCK_SIZE = 32
-    x = get_normal_sample(64, 64, 4096, BLOCK_SIZE, mean=0.0, std=5.0)
+    x = get_normal_sample(64, 64, 4096, 16, mean=0.0, std=5.0)
     min_range, max_range = -7, 8
-    reconstructed_vals, scale_offset_distribution, _ = quantize_single(x, min_range=min_range, max_range=max_range, BLOCK_SIZE=BLOCK_SIZE)
+    reconstructed_vals, scale_offset_distribution, _ = quantize_single(x, min_range=min_range, max_range=max_range)
     scale_offset_distribution_uns = scale_offset_distribution.flatten()
 
     # Count occurrences of each discrete offset value
@@ -221,7 +221,7 @@ if __name__ == "__main__":
     plt.title('Scale Offset Distribution Probabilities')
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.savefig(f'scale_offset_probs_BLOCK_SIZE_{BLOCK_SIZE}.png', dpi=150)
+    plt.savefig('scale_offset_probs.png', dpi=150)
     print("Probabilities saved to scale_offset_probs.png")
     plt.show()
 
@@ -232,8 +232,8 @@ if __name__ == "__main__":
     axes = axes.flatten()
     
     for idx, scale_factor in enumerate(scale_factors):
-        x = create_outlier_sample(64, 64, 4096, BLOCK_SIZE, mean=0.0, std=1.0, scale_factor=scale_factor)
-        reconstructed_vals, scale_offset_distribution, _ = quantize_single(x, min_range=min_range, max_range=max_range, BLOCK_SIZE=BLOCK_SIZE)
+        x = create_outlier_sample(64, 64, 4096, 16, mean=0.0, std=1.0, scale_factor=scale_factor)
+        reconstructed_vals, scale_offset_distribution, _ = quantize_single(x, min_range=min_range, max_range=max_range)
         scale_offset_distribution_uns = scale_offset_distribution.flatten()
         
         histogram = torch.zeros(max_range - min_range + 1, dtype=torch.long, device=x.device)
@@ -248,42 +248,34 @@ if __name__ == "__main__":
         axes[idx].grid(True, alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig(f'scale_offset_probs_outliers_BLOCK_SIZE_{BLOCK_SIZE}.png', dpi=150)
+    plt.savefig('scale_offset_probs_outliers.png', dpi=150)
     print("Outlier histograms saved to scale_offset_probs_outliers.png")
     plt.show()
 
-    # 2D histogram: mantissa bits of original scale vs offset
-    x = create_outlier_sample(64, 64, 4096, BLOCK_SIZE, mean=0.0, std=1.0, scale_factor=1.0)
-    _, scale_offset_distribution, scales = quantize_single(x, min_range=min_range, max_range=max_range, BLOCK_SIZE=BLOCK_SIZE)
+    # 2D histogram: original scale vs offset
+    x = create_outlier_sample(64, 64, 4096, 16, mean=0.0, std=1.0, scale_factor=1.0)
+    _, scale_offset_distribution, scales = quantize_single(x, min_range=min_range, max_range=max_range)
+    vlim_scale = scales.to(torch.float32).flatten()
+    offsets = scale_offset_distribution.flatten()
     
-    # Extract mantissa bits from FP8 scales (E4M3 format has 3-bit mantissa)
-    # First convert float32 back to float8_e4m3fn to get the actual bit pattern
-    scales_fp8 = scales.to(torch.float8_e4m3fn)
-    scales_uint8 = scales_fp8.view(torch.uint8).flatten()
-    mantissa_bits = (scales_uint8 & 0b00000111).long()  # Extract lower 3 bits
-    offsets = scale_offset_distribution.flatten().long()
+    vlim_bins = torch.arange(0, 8, device='cuda:0')
+    offset_bins = torch.arange(min_range, max_range + 2, device='cuda:0')
+    hist_2d = torch.zeros((len(vlim_bins) - 1, len(offset_bins) - 1), device='cuda:0')
     
-    # Create 2D histogram: 8 mantissa values (0-7) x offset range
-    num_mantissa_vals = 8
-    num_offset_vals = max_range - min_range + 1
-    hist_2d = torch.zeros((num_mantissa_vals, num_offset_vals), device='cuda:0')
-    
-    for i in range(num_mantissa_vals):
-        for j in range(num_offset_vals):
-            offset_val = min_range + j
-            mask = (mantissa_bits == i) & (offsets == offset_val)
+    for i in range(len(vlim_bins) - 1):
+        for j in range(len(offset_bins) - 1):
+            mask = (vlim_scale >= vlim_bins[i]) & (vlim_scale < vlim_bins[i + 1]) & (offsets >= offset_bins[j]) & (offsets < offset_bins[j + 1])
             hist_2d[i, j] = mask.sum()
     
-    # Normalize to get probabilities
     hist_2d = hist_2d / hist_2d.sum()
     
     plt.figure(figsize=(8, 6))
-    plt.imshow(hist_2d.cpu().numpy(), aspect='auto', origin='lower', extent=[min_range, max_range + 1, 0, 8], cmap='viridis')
+    plt.imshow(hist_2d.cpu().numpy(), aspect='auto', origin='lower', extent=[min_range, max_range + 1, 0, 7], cmap='viridis')
     plt.colorbar()
     plt.xlabel('offset from vlim scale')
-    plt.ylabel('original vlim scale mantissa')
+    plt.ylabel('original vlim unittsa')
     plt.tight_layout()
-    plt.savefig(f'scale_offset_2d_BLOCK_SIZE_{BLOCK_SIZE}.png', dpi=150)
+    plt.savefig('scale_offset_2d.png', dpi=150)
     print("2D histogram saved to scale_offset_2d.png")
     plt.show()
 
