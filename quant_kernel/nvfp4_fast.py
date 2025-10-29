@@ -54,7 +54,13 @@ class FastFP4Quantizer(nn.Module):
 
         x=x.to(torch.float32)
 
-        if self.global_sf_max is not None:
+        if self.global_sf_max == 0:
+            global_sf = torch.max(abs(x)).to(torch.float32)
+
+            global_sf = global_sf * self.get_reciprocal(torch.tensor(2688, dtype=self.dequant_dtype, device=self.device))
+            x=x*self.get_reciprocal(global_sf)
+
+        elif self.global_sf_max is not None:
             global_sf = torch.max(abs(x), dim=-1)[0].to(torch.float32)
 
             global_sf = global_sf * self.get_reciprocal(self.global_sf_max)
@@ -86,7 +92,7 @@ class FastFP4Quantizer(nn.Module):
         if self.global_sf_max is not None:
             return reconstructed_f32, global_sf
         else:
-            return reconstructed_f32, torch.ones(*([1] * reconstructed_f32.ndim),device=reconstructed_f32.device)
+            return reconstructed_f32, torch.ones(*([1] * (reconstructed_f32.ndim-1)),device=reconstructed_f32.device)
 
 
 
