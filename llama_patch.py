@@ -439,7 +439,7 @@ def llama_fp4_attention_forward(
             self.p_fp4_quantizer = self.fast_fp4_quantizer
 
         if self.hessians:
-            hessian_folder = os.getenv('HESSIAN_FOLDER', 'hessians')
+            global hessian_folder
             qk_hessian_file = f"{hessian_folder}/mag_reduce.pt"
             if os.path.exists(qk_hessian_file):
                 self.mag_reduce=torch.load(qk_hessian_file)
