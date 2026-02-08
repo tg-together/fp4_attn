@@ -11,7 +11,9 @@ conda create -n fp4 python=3.12 -y
 conda activate fp4
 
 # Install packages
-pip install lm_eval==0.4.9.1 matplotlib glog
+python -m pip install lm_eval==0.4.9.1 matplotlib glog
+
+python -m pip install transformers==4.55.4
 
 
 BASHRC="$HOME/.bashrc"
@@ -35,7 +37,7 @@ source "$BASHRC"
 # Install local package if directory exists
 if [ -d "fast_fp4" ]; then
   cd fast_fp4
-  pip install -e .
+  python -m pip install --no-build-isolation -e .
 else
   echo "Directory fast_fp4 not found. Skipping local install."
 fi

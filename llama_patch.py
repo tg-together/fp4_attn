@@ -2,7 +2,7 @@ import argparse
 import json
 import os
 from pickle import NONE
-from lm_eval import simple_evaluate
+# from lm_eval import simple_evaluate
 from transformers import AutoModelForCausalLM, AutoConfig
 import transformers
 import torch

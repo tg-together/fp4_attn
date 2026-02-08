@@ -3,7 +3,7 @@ import argparse
 import json
 import os
 import sys
-from lm_eval import simple_evaluate
+from lm_eval.evaluator import simple_evaluate
 from transformers import AutoModelForCausalLM, AutoConfig
 import transformers
 import torch
