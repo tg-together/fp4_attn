@@ -194,13 +194,13 @@ def quantize_q(module, q_orig, dual=True):
         module.q_quant_log=True
 
     if dual:
-        Qq_hi, Qq_lo, Qs_hi, Qs_lo = module.fast_fp4_quantizer.dual_nvfp4(q_orig, search=False)
+        Qq_hi, Qq_lo, Qs_hi, Qs_lo = module.fast_fp4_quantizer.dual_nvfp4(q_orig, search=module.search, override_scaling=module.sa3)
     else:
-        Qq_hi, Qs_hi = module.fast_fp4_quantizer.single_nvfp4(q_orig, search=False)
+        Qq_hi, Qs_hi = module.fast_fp4_quantizer.single_nvfp4(q_orig, search=module.search, override_scaling=module.sa3)
         Qq_lo = torch.zeros_like(Qq_hi)
         Qs_lo = torch.zeros_like(Qs_hi)
     
-    if module.fast_fp4_quantizer.global_sf_max is not None:
+    if module.fast_fp4_quantizer.global_sf_max is not None and not module.sa3:
         Qs_hi = Qs_hi[:, :, :, None]
         Qs_lo = Qs_lo[:, :, :, None]
 
@@ -213,9 +213,9 @@ def quantize_k(module, k_orig):
         print("Quantizing K")
         module.k_quant_log=True
 
-    Kq_hi, Ks_hi = module.fast_fp4_quantizer.single_nvfp4(k_orig, search=True)
+    Kq_hi, Ks_hi = module.fast_fp4_quantizer.single_nvfp4(k_orig, search=module.search, override_scaling=module.sa3)
 
-    if module.fast_fp4_quantizer.global_sf_max is not None:
+    if module.fast_fp4_quantizer.global_sf_max is not None and not module.sa3:
         Ks_hi = Ks_hi[:, :, :, None]
 
     return Kq_hi, Ks_hi
@@ -230,10 +230,10 @@ def quantize_v(module, v_orig):
     B, H_v, T, D = v_orig.shape
     v_ = v_orig
 
-    Vq_hi, Vs_hi = module.fast_fp4_quantizer.single_nvfp4(v_orig, search=True, transpose=True)
+    Vq_hi, Vs_hi = module.fast_fp4_quantizer.single_nvfp4(v_orig, search=module.search, transpose=True, override_scaling=module.sa3)
     Vq_lo = torch.zeros_like(Vq_hi)
 
-    if module.fast_fp4_quantizer.global_sf_max is not None:
+    if module.fast_fp4_quantizer.global_sf_max is not None and not module.sa3:
         Vs_hi = Vs_hi[:, :, :, None]
 
     return Vq_hi, Vs_hi
@@ -246,11 +246,11 @@ def quantize_p(module, attn_weights, dual=True):
 
 
     if dual:
-        Aq_hi, Aq_lo, As_hi, As_lo = module.fast_fp4_quantizer.dual_nvfp4(attn_weights, search=False)
+        Aq_hi, Aq_lo, As_hi, As_lo = module.fast_fp4_quantizer.dual_nvfp4(attn_weights, search=module.search)
 
     else:
 
-        Aq_hi,As_hi = module.fast_fp4_quantizer.single_nvfp4(attn_weights, search=False)
+        Aq_hi,As_hi = module.fast_fp4_quantizer.single_nvfp4(attn_weights, search=module.search)
         Aq_lo = torch.zeros_like(Aq_hi)
         As_lo = torch.zeros_like(As_hi)
 
@@ -404,12 +404,35 @@ def llama_fp4_attention_forward(
         self.use_dual_quant_q = os.getenv('FP4_USE_DUAL_QUANT_Q', 'true').lower() == 'true'
         self.use_dual_quant_attn = os.getenv('FP4_USE_DUAL_QUANT_ATTN', 'false').lower() == 'true'
         self.fp_mask = os.getenv('FP_MASK', 'true').lower() == 'true'
+        self.search = os.getenv('SEARCH', 'true').lower() == 'true'
         self.ip = os.getenv('IP', 'true').lower() == 'true'
         self.randomization = os.getenv('RANDOMIZATION', 'hadamard').lower()
         self.hessians=os.getenv('HESSIANS', 'true').lower() == 'true'
         self.first_block={"K":None, "V":None}
         self.unquantized_cache={"K":None, "V":None}
         
+        self.sa3 = os.getenv('SA3', 'false').lower() == 'true'
+        self.naive = os.getenv('NAIVE', 'false').lower() == 'true'
+        self.tensor_scaling = False
+
+        self.global_sf_max = 1536
+
+
+        if self.naive:
+            self.use_dual_quant_q = False
+            self.use_dual_quant_attn = False
+            self.fp_mask = False
+            self.ip = False
+            self.hessians = False
+            self.tensor_scaling = True
+
+        if self.sa3:
+            self.use_dual_quant_q = False
+            self.use_dual_quant_attn = False
+            self.fp_mask = False
+            self.ip = False
+            self.hessians = False
+            self.global_sf_max = 2688
         
         # Load from the correct folder based on hessian_folder
         if self.hessians:
@@ -422,7 +445,7 @@ def llama_fp4_attention_forward(
     
             
         # Initialize FP4Quantizer with appropriate parameters
-        self.fast_fp4_quantizer = FastFP4Quantizer(global_sf_max=1536, device=self.q_proj.weight.device)
+        self.fast_fp4_quantizer = FastFP4Quantizer(global_sf_max=self.global_sf_max, device=self.q_proj.weight.device, tensor_scaling=self.tensor_scaling)
         self.q_quant_log=False
         self.k_quant_log=False
         self.v_quant_log=False
@@ -434,7 +457,10 @@ def llama_fp4_attention_forward(
             f"FP_MASK={self.fp_mask}, "
             f"IP={self.ip}, "
             f"RANDOMIZATION={self.randomization}, "
-            f"HESSIANS={self.hessians}"
+            f"HESSIANS={self.hessians} "
+            f"SA3={self.sa3}, "
+            f"NAIVE={self.naive}"
+            f"SEARCH={self.search}"
         )
 
 
@@ -496,19 +522,43 @@ def llama_fp4_attention_forward(
                 self.unquantized_cache["V"] = torch.cat([self.unquantized_cache["V"], value_states], dim=2)
 
 
-            self.mode="decode"          
+            self.mode="decode"  
+
+        if self.sa3:
+            Kmean = key_states.mean(dim=(0,1,2), keepdim=True)  
+            Qmean = query_states.mean(dim=(0,1,2), keepdim=True) 
+            key_states = key_states - Kmean
+            query_states = query_states - Qmean     
         
         Qq_hi, Qq_lo, Qs_hi, Qs_lo = quantize_q(self, query_states, dual=self.use_dual_quant_q)
         query_states = Qq_hi*Qs_hi + Qq_lo*Qs_lo 
 
+        if self.sa3:
+            query_states = query_states + Qmean
+
+        if torch.isnan(query_states).any() or torch.isinf(query_states).any():
+            print("NaN or Inf detected in quantized query states at layer", self.layer_idx)
+            raise ValueError("NaN or Inf detected in quantized query states")
 
         Kq, Ks = quantize_k(self, key_states)
         key_states = Kq*Ks 
+        
+        if self.sa3:
+            key_states = key_states + Kmean
+
+        if torch.isnan(key_states).any() or torch.isinf(key_states).any():
+            print("NaN or Inf detected in quantized key states at layer", self.layer_idx)
+            raise ValueError("NaN or Inf detected in quantized key states")
 
 
         Vq, Vs = quantize_v(self, value_states)
         value_states = Vq*Vs 
 
+        if torch.isnan(value_states).any() or torch.isinf(value_states).any():
+            print("NaN or Inf detected in quantized value states at layer", self.layer_idx)
+            raise ValueError("NaN or Inf detected in quantized value states")
+        
+    
     else:
        
         query_states_uq=query_states

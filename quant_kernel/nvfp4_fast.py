@@ -23,6 +23,7 @@ class FastFP4Quantizer(nn.Module):
                  float4_e2m1_max: float = 6.0,
                  float8_e4m3_max: float = 448.0,
                  global_sf_max = 448.0*6.0,
+                 tensor_scaling: bool = False,
                  device: torch.device = torch.device("cpu")):
         super().__init__()
         self.block_size = block_size
@@ -35,6 +36,7 @@ class FastFP4Quantizer(nn.Module):
         self.zero_tensor = torch.tensor(0.0, dtype=dequant_dtype, device=device)
         self.one_tensor = torch.tensor(1.0, dtype=dequant_dtype, device=device)
         self.dequant_dtype = dequant_dtype
+        self.tensor_scaling = tensor_scaling
 
  
 
@@ -46,7 +48,7 @@ class FastFP4Quantizer(nn.Module):
             raise TypeError("Input must be a torch.Tensor.")
 
 
-    def single_nvfp4(self, x:Tensor, search: bool = False, transpose: bool = False):
+    def single_nvfp4(self, x:Tensor, search: bool = False, transpose: bool = False, override_scaling : bool = False):
 
         assert x.dim() == 4, "Input must be 4D: (b, h, n, d)"
         b, h, n, d = x.shape
@@ -54,11 +56,19 @@ class FastFP4Quantizer(nn.Module):
 
         x=x.to(torch.float32)
 
-        if self.global_sf_max is not None:
+        if self.tensor_scaling and not override_scaling:
+            # Per-tensor scaling
+            sf = torch.max(abs(x)).to(torch.float32)
+            sf = sf * self.get_reciprocal(torch.tensor(448.0*6.0, dtype=self.dequant_dtype, device=sf.device))
+            x = x * self.get_reciprocal(sf)
+
+
+        elif self.global_sf_max is not None and not override_scaling:
             global_sf = torch.max(abs(x), dim=-1)[0].to(torch.float32)
 
             global_sf = global_sf * self.get_reciprocal(self.global_sf_max)
             x=x*self.get_reciprocal(global_sf)[:, :, :, None]
+
 
 
         if transpose:
@@ -83,19 +93,21 @@ class FastFP4Quantizer(nn.Module):
         if transpose:
             reconstructed_f32 = reconstructed_f32.permute(0, 1, 3, 2)
 
-        if self.global_sf_max is not None:
+        if self.tensor_scaling and not override_scaling:
+            return reconstructed_f32, sf.reshape(1,1,1)
+        if self.global_sf_max is not None and not override_scaling:
             return reconstructed_f32, global_sf
         else:
             return reconstructed_f32, torch.ones(*([1] * reconstructed_f32.ndim),device=reconstructed_f32.device)
 
 
 
-    def dual_nvfp4(self, x:Tensor, search: bool = False, transpose: bool = False):
+    def dual_nvfp4(self, x:Tensor, search: bool = False, transpose: bool = False, override_scaling : bool = False):
 
-        x_hi_q, scales_hi = self.single_nvfp4(x, search, transpose) 
+        x_hi_q, scales_hi = self.single_nvfp4(x, search, transpose, override_scaling=override_scaling) 
         
 
-        x_lo_q, scales_lo = self.single_nvfp4(x - x_hi_q*scales_hi[:, :, :, None], search, transpose)
+        x_lo_q, scales_lo = self.single_nvfp4(x - x_hi_q*scales_hi[:, :, :, None], search, transpose, override_scaling=override_scaling)
 
         return x_hi_q, x_lo_q, scales_hi, scales_lo
 
