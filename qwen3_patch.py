@@ -423,6 +423,7 @@ def qwen3_fp4_attention_forward(
             self.ip = False
             self.hessians = False
             self.tensor_scaling = True
+            self.search = os.getenv('SEARCH', 'false').lower() == 'true'
 
         if self.sa3:
             self.use_dual_quant_q = False
@@ -431,6 +432,8 @@ def qwen3_fp4_attention_forward(
             self.ip = False
             self.hessians = False
             self.global_sf_max = 2688
+            self.search = os.getenv('SEARCH', 'false').lower() == 'true'
+
         
         # Load from the correct folder based on hessian_folder
         if self.hessians:
