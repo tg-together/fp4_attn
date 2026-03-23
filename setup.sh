@@ -2,19 +2,24 @@
 set -e  # exit on error
 
 # Initialize conda
-eval "$(conda shell.bash hook)"
+# eval "$(conda shell.bash hook)"
 
 # Create env
-conda create -n fp4 python=3.12 -y
+# conda create -n fp4 python=3.12 -y
 
-# Activate env
-conda activate fp4
+# conda create -p /anvil/projects/x-nairr250415/tgupta/conda_envs/fp4 python=3.12 -y
+
+# # Activate env
+# conda activate /anvil/projects/x-nairr250415/tgupta/conda_envs/fp4
 
 # Install packages
-python -m pip install lm_eval==0.4.9.1 matplotlib glog
 
-python -m pip install transformers==4.55.4
+# python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu130
 
+# python -m pip install transformers==5.1.0 lighteval==0.13.0 matplotlib glog
+
+
+# Install same pytorch as CUDA first
 
 BASHRC="$HOME/.bashrc"
 
@@ -26,11 +31,11 @@ sed -i '/export LD_LIBRARY_PATH=\$CUDA_HOME\/lib64:\$LD_LIBRARY_PATH/d' "$BASHRC
 # Add new CUDA 12.9 lines
 cat << 'EOF' >> "$BASHRC"
 
-# >>> CUDA 12.9 default setup >>>
+# >>> CUDA default setup >>>
 export CUDA_HOME=/usr/local/cuda
 export PATH=$CUDA_HOME/bin:$PATH
 export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
-# <<< CUDA 12.9 default setup <<<
+# <<< CUDA default setup <<<
 EOF
 
 source "$BASHRC"
