@@ -85,7 +85,7 @@ def save_k_means(model_name, dataset, tag=""):
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--seed', default=0, type=int)
-parser.add_argument('--seqlen', default=16300, type=int)
+parser.add_argument('--seqlen', default=16834, type=int)
 parser.add_argument('--batch_size', default=1, type=int)
 parser.add_argument('--num_samples', default=50, type=int)
 parser.add_argument('--quantize', action='store_true')

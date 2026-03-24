@@ -41,12 +41,36 @@ def parse_args():
     parser.add_argument("--use_chat_template", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--max_samples", type=int, default=None)
+    parser.add_argument('--quantize', action='store_true')
     return parser.parse_args()
+
+def patch_attention():
+
+
+
+    transformers.models.llama.modeling_llama.LlamaAttention.forward = llama_fp4_attention_forward
+    transformers.models.qwen3.modeling_qwen3.Qwen3Attention.forward = qwen3_fp4_attention_forward
+
+    original_init_llama = transformers.models.llama.modeling_llama.LlamaForCausalLM.__init__
+    original_init_qwen3 = transformers.models.qwen3.modeling_qwen3.Qwen3ForCausalLM.__init__
+
+    def patched_init_llama(self, config):
+        original_init_llama(self, config)             
+        self.config._attn_implementation = "eager"
+
+    def patched_init_qwen3(self, config):
+        original_init_qwen3(self, config)             
+        self.config._attn_implementation = "eager"
+
+    transformers.models.llama.modeling_llama.LlamaForCausalLM.__init__ = patched_init_llama
+    transformers.models.qwen3.modeling_qwen3.Qwen3ForCausalLM.__init__ = patched_init_qwen3
 
 
 def main():
 
-    
+    patch_attention()
+    llama_fp4_attention_forward.quantize_enabled = args.quantize
+    qwen3_fp4_attention_forward.quantize_enabled = args.quantize
 
 
     start = datetime.now()
