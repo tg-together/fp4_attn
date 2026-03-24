@@ -2,7 +2,6 @@ import argparse
 import json
 import os
 from pickle import NONE
-from lm_eval import simple_evaluate
 from transformers import AutoModelForCausalLM, AutoConfig
 import transformers
 import torch
@@ -197,14 +196,13 @@ def quantize_q(module, q_orig, dual=True):
         module.q_quant_log=True
 
     if dual:
-        Qq_hi, Qq_lo, Qs_hi, Qs_lo = module.fast_fp4_quantizer.dual_nvfp4(q_orig, search=False)
+        Qq_hi, Qq_lo, Qs_hi, Qs_lo = module.fast_fp4_quantizer.dual_nvfp4(q_orig, search=module.search, override_scaling=module.sa3)
     else:
-        Qq_hi, Qs_hi = module.fast_fp4_quantizer.single_nvfp4(q_orig, search=module.search)
+        Qq_hi, Qs_hi = module.fast_fp4_quantizer.single_nvfp4(q_orig, search=module.search, override_scaling=module.sa3)
         Qq_lo = torch.zeros_like(Qq_hi)
         Qs_lo = torch.zeros_like(Qs_hi)
-
     
-    if module.fast_fp4_quantizer.global_sf_max is not None and module.fast_fp4_quantizer.global_sf_max != 0:
+    if module.fast_fp4_quantizer.global_sf_max is not None and not module.sa3 and module.fast_fp4_quantizer.global_sf_max != 0:
         Qs_hi = Qs_hi[:, :, :, None]
         Qs_lo = Qs_lo[:, :, :, None]
 
@@ -217,9 +215,9 @@ def quantize_k(module, k_orig):
         print("Quantizing K")
         module.k_quant_log=True
 
-    Kq_hi, Ks_hi = module.fast_fp4_quantizer.single_nvfp4(k_orig, search=module.search)
+    Kq_hi, Ks_hi = module.fast_fp4_quantizer.single_nvfp4(k_orig, search=module.search, override_scaling=module.sa3)
 
-    if module.fast_fp4_quantizer.global_sf_max is not None and module.fast_fp4_quantizer.global_sf_max != 0:
+    if module.fast_fp4_quantizer.global_sf_max is not None and not module.sa3 and module.fast_fp4_quantizer.global_sf_max != 0:
         Ks_hi = Ks_hi[:, :, :, None]
 
     return Kq_hi, Ks_hi
@@ -234,10 +232,10 @@ def quantize_v(module, v_orig):
     B, H_v, T, D = v_orig.shape
     v_ = v_orig
 
-    Vq_hi, Vs_hi = module.fast_fp4_quantizer.single_nvfp4(v_orig, search=module.search, transpose=True)
+    Vq_hi, Vs_hi = module.fast_fp4_quantizer.single_nvfp4(v_orig, search=module.search, transpose=True, override_scaling=module.sa3)
     Vq_lo = torch.zeros_like(Vq_hi)
 
-    if module.fast_fp4_quantizer.global_sf_max is not None and module.fast_fp4_quantizer.global_sf_max != 0:
+    if module.fast_fp4_quantizer.global_sf_max is not None and not module.sa3 and module.fast_fp4_quantizer.global_sf_max != 0:
         Vs_hi = Vs_hi[:, :, :, None]
 
     return Vq_hi, Vs_hi
@@ -250,15 +248,15 @@ def quantize_p(module, attn_weights, dual=True):
 
 
     if dual:
-        Aq_hi, Aq_lo, As_hi, As_lo = module.p_fp4_quantizer.dual_nvfp4(attn_weights, search=False)
+        Aq_hi, Aq_lo, As_hi, As_lo = module.fast_fp4_quantizer.dual_nvfp4(attn_weights, search=module.search)
 
     else:
 
-        Aq_hi,As_hi = module.p_fp4_quantizer.single_nvfp4(attn_weights, search=module.search_p)
+        Aq_hi,As_hi = module.fast_fp4_quantizer.single_nvfp4(attn_weights, search=module.search)
         Aq_lo = torch.zeros_like(Aq_hi)
         As_lo = torch.zeros_like(As_hi)
 
-    if module.p_fp4_quantizer.global_sf_max is not None and module.p_fp4_quantizer.global_sf_max != 0:
+    if module.fast_fp4_quantizer.global_sf_max is not None and module.fast_fp4_quantizer.global_sf_max != 0:
         As_hi = As_hi[:, :, :, None]
         As_lo = As_lo[:, :, :, None]
 
@@ -338,6 +336,7 @@ def flash_style_attention(
             q=q_blk
             k=k_blk
             v=v_blk
+
             if module.layer_idx != 0 and hasattr(module, 'quantize') and module.quantize and module.fp_mask:
 
                 if module.mode=="prefill" and (k_block_idx==0 or k_block_idx==q_block_idx):
@@ -407,36 +406,39 @@ def qwen3_fp4_attention_forward(
         self.use_dual_quant_q = os.getenv('FP4_USE_DUAL_QUANT_Q', 'false').lower() == 'true'
         self.use_dual_quant_attn = os.getenv('FP4_USE_DUAL_QUANT_ATTN', 'false').lower() == 'true'
         self.fp_mask = os.getenv('FP_MASK', 'true').lower() == 'true'
+        self.search = os.getenv('SEARCH', 'true').lower() == 'true'
         self.ip = os.getenv('IP', 'true').lower() == 'true'
         self.randomization = os.getenv('RANDOMIZATION', 'hadamard').lower()
         self.hessians=os.getenv('HESSIANS', 'true').lower() == 'true'
         self.first_block={"K":None, "V":None}
         self.unquantized_cache={"K":None, "V":None}
-        self.search = os.getenv('SEARCH', 'true').lower() == 'true'
-        self.naive = os.getenv('NAIVE_FP4', 'false').lower() == 'true'
-        self.search_p = os.getenv('SEARCH_P', 'false').lower() == 'true'
-        self.sage_attention=os.getenv('SAGE_ATTENTION', 'false').lower() == 'true'
         
-        
+        self.sa3 = os.getenv('SA3', 'false').lower() == 'true'
+        self.naive = os.getenv('NAIVE', 'false').lower() == 'true'
+        self.tensor_scaling = False
 
+        self.global_sf_max = 1536
+        
         if self.naive:
+            self.use_dual_quant_q = False
+            self.use_dual_quant_attn = False
             self.fp_mask = False
             self.ip = False
             self.hessians = False
-            self.fast_fp4_quantizer = FastFP4Quantizer(global_sf_max=0, device=self.q_proj.weight.device)
-            self.p_fp4_quantizer = self.fast_fp4_quantizer
+            self.tensor_scaling = True
+            self.search = os.getenv('SEARCH', 'false').lower() == 'true'
 
-        if self.sage_attention:
+        if self.sa3:
+            self.use_dual_quant_q = False
+            self.use_dual_quant_attn = False
             self.fp_mask = False
             self.ip = False
             self.hessians = False
-            self.fast_fp4_quantizer = FastFP4Quantizer(global_sf_max=None, device=self.q_proj.weight.device)
-            self.p_fp4_quantizer = FastFP4Quantizer(global_sf_max=2688, device=self.q_proj.weight.device)
+            self.global_sf_max = 2688
+            self.search = os.getenv('SEARCH', 'false').lower() == 'true'
+
         
-        else:
-            self.fast_fp4_quantizer = FastFP4Quantizer(global_sf_max=1536, device=self.q_proj.weight.device)
-            self.p_fp4_quantizer = self.fast_fp4_quantizer
-
+        # Load from the correct folder based on hessian_folder
         if self.hessians:
             global hessian_folder
             qk_hessian_file = f"{hessian_folder}/mag_reduce.pt"
@@ -444,6 +446,10 @@ def qwen3_fp4_attention_forward(
                 self.mag_reduce=torch.load(qk_hessian_file)
             else:
                 raise ValueError(f"QK Hessian file not found: {qk_hessian_file}")
+    
+            
+        # Initialize FastFP4Quantizer with appropriate parameters
+        self.fast_fp4_quantizer = FastFP4Quantizer(global_sf_max=self.global_sf_max, device=self.q_proj.weight.device, tensor_scaling=self.tensor_scaling)
         self.q_quant_log=False
         self.k_quant_log=False
         self.v_quant_log=False
@@ -455,11 +461,10 @@ def qwen3_fp4_attention_forward(
             f"FP_MASK={self.fp_mask}, "
             f"IP={self.ip}, "
             f"RANDOMIZATION={self.randomization}, "
-            f"HESSIANS={self.hessians}, "
-            f"SAGE_ATTENTION={self.sage_attention}",
-            f"NAIVE={self.naive}, "
-            f"SEARCH={self.search}, "
-            f"SEARCH_P={self.search_p}"
+            f"HESSIANS={self.hessians} "
+            f"SA3={self.sa3}, "
+            f"NAIVE={self.naive}"
+            f"SEARCH={self.search}"
         )
 
 
@@ -482,20 +487,21 @@ def qwen3_fp4_attention_forward(
 
     if self.layer_idx != 0 and hasattr(self, 'quantize') and self.quantize:
 
-        query_states, key_states, value_states = query_states.to(torch.float32), key_states.to(torch.float32), value_states.to(torch.float32)
-
         if self.ip:
             R=None
             invR=None
             if self.hessians:
                 R=self.mag_reduce[f'layer_{self.layer_idx}']['R'].to(query_states.device).to(torch.float32)
                 invR=self.mag_reduce[f'layer_{self.layer_idx}']['invR'].to(key_states.device).to(torch.float32)
-            query_states, key_states = incoherence_processing(self, query_states, key_states, R, invR)
+            query_states, key_states = incoherence_processing(self, query_states.to(torch.float32), key_states.to(torch.float32), R, invR)
 
+        value_states = value_states.to(torch.float32)
         query_states_uq, key_states_uq , value_states_uq = query_states, key_states, value_states
         
+
         if self.fp_mask:
-            if (past_key_value is None or len(past_key_value)<self.config.num_hidden_layers) : #Prefill stage for this layer
+
+            if past_key_value is None or len(past_key_value)<self.config.num_hidden_layers: #Prefill stage for this layer
 
                 first_slice, middle_slice, remaining_slice = get_block_indices(T_kv, self.attention_block_size)
 
@@ -525,27 +531,28 @@ def qwen3_fp4_attention_forward(
                         self.unquantized_cache["K"] = torch.cat([self.unquantized_cache["K"], key_states], dim=2)
                         self.unquantized_cache["V"] = torch.cat([self.unquantized_cache["V"], value_states], dim=2)
 
+                self.mode="decode"           
 
-                self.mode="decode" 
+        if self.sa3:
+            Kmean = key_states.mean(dim=(0,1,2), keepdim=True)  
+            Qmean = query_states.mean(dim=(0,1,2), keepdim=True) 
+            key_states = key_states - Kmean
+            query_states = query_states - Qmean 
 
-        if self.sage_attention:
-            key_states = key_states-torch.mean(key_states, dim=-1, keepdim=True)
-            query_states_mean=torch.mean(query_states, dim=-1, keepdim=True)
-            query_states = query_states-query_states_mean
 
-
-                 
         Qq_hi, Qq_lo, Qs_hi, Qs_lo = quantize_q(self, query_states, dual=self.use_dual_quant_q)
         query_states = Qq_hi*Qs_hi + Qq_lo*Qs_lo 
 
-        if self.sage_attention:
-            query_states = query_states+query_states_mean
-
+        if self.sa3:
+            query_states = query_states + Qmean
 
         Kq, Ks = quantize_k(self, key_states)
         key_states = Kq*Ks 
 
+        if self.sa3:
+            key_states = key_states + Kmean
 
+            
         Vq, Vs = quantize_v(self, value_states)
         value_states = Vq*Vs 
 

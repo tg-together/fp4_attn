@@ -85,8 +85,8 @@ def save_k_means(model_name, dataset, tag=""):
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--seed', default=0, type=int)
-parser.add_argument('--seqlen', default=16384, type=int)
-parser.add_argument('--batch_size', default=4, type=int)
+parser.add_argument('--seqlen', default=16834, type=int)
+parser.add_argument('--batch_size', default=1, type=int)
 parser.add_argument('--num_samples', default=50, type=int)
 parser.add_argument('--quantize', action='store_true')
 parser.add_argument('--no_use_flash_attn', action='store_true')
@@ -97,40 +97,6 @@ parser.add_argument("--record_means", action="store_true", help="Record K means"
 parser.add_argument("--tag", default="", help="Tag to append to filenames")
 parser.add_argument("--hessian_dataset", type=str, default="wikitext2", help="Dataset name to load hessians from (e.g., 'wikitext2')")
 parser.add_argument("--kvquant", action="store_true", help="Use KVQuant quantization")
-
-
-def get_kvquant_model(model_name):
-    """Get KVQuant quantized model with default settings from run.sh"""
-    # Add KVQuant path to sys.path
-    kvquant_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'KVquant_baseline', 'quant')
-    kvquant_path_root = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'KVquant_baseline')
-    print(f"KVQuant path: {kvquant_path}")
-    print(f"KVQuant path root: {kvquant_path_root}")
-    sys.path.insert(0, kvquant_path)
-    
-    from llama_simquant import run_kvquant, create_parser
-    
-    # Default KVQuant arguments from run.sh (without seqlen - matching lmeval_main.py)
-    kvquant_args = [
-        '--abits', '4',
-        '--nuq',
-        '--first_few_fp16', '1',
-        '--quantizer-path', f'{kvquant_path_root}/output/{model_name.split("/")[-1]}/quantizers.pickle'
-    ]
-    
-    # Parse KVQuant arguments
-    parser = create_parser()
-    args = parser.parse_args([model_name] + kvquant_args)
-    
-    # Get quantized model
-    model = run_kvquant(args, return_model=True)
-
-    print(f"KVQuant model fetched")
-    
-    # Remove from path
-    sys.path.remove(kvquant_path)
-    
-    return model
 
 
 def patch_attention():
@@ -217,6 +183,8 @@ def main(args):
                                                     batch_size=args.batch_size,
                                                     model=model_str,
                                                     train=use_train)
+
+        print("Total samples : ", len(dataloader))
 
         loss_fct = torch.nn.CrossEntropyLoss(reduction='sum')
         acc_loss = 0.0
