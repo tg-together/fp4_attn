@@ -85,8 +85,8 @@ def save_k_means(model_name, dataset, tag=""):
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--seed', default=0, type=int)
-parser.add_argument('--seqlen', default=16834, type=int)
-parser.add_argument('--batch_size', default=1, type=int)
+parser.add_argument('--seqlen', default=16384, type=int)
+parser.add_argument('--batch_size', default=2, type=int)
 parser.add_argument('--num_samples', default=50, type=int)
 parser.add_argument('--quantize', action='store_true')
 parser.add_argument('--no_use_flash_attn', action='store_true')
@@ -239,6 +239,15 @@ def main(args):
 if __name__ == '__main__':
     torch.set_grad_enabled(False)
     args = parser.parse_args()
+    
+    # Print all arguments at the start of job
+    print("=" * 80)
+    print("JOB STARTING - Arguments:")
+    print("=" * 80)
+    for arg, value in vars(args).items():
+        print(f"  {arg}: {value}")
+    print("=" * 80)
+    
     random.seed(args.seed)
     torch.random.manual_seed(args.seed)
     main(args)
