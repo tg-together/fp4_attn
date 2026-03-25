@@ -24,7 +24,7 @@ LOG_OUTPUT_PATH="logs/ppl_benchmark"
 # Use unbuffered Python output for better logging
 export PYTHONUNBUFFERED=1
 
-mkdir -p "${LOG_OUTPUT_PATH}/fp4/"
+mkdir -p "${LOG_OUTPUT_PATH}/"
 
 MODEL="meta-llama/Llama-3.1-8B"
 
@@ -32,14 +32,14 @@ MODEL="meta-llama/Llama-3.1-8B"
 #Qwen/Qwen3-4B
 #meta-llama/Llama-3.1-70B
 
-CUDA_VISIBLE_DEVICES=0 python -u eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 > "${LOG_OUTPUT_PATH}/fp4/${MODEL##*/}_ppl_baseline.txt" 2>&1
+CUDA_VISIBLE_DEVICES=0 python -u eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 > "${LOG_OUTPUT_PATH}/${MODEL##*/}_ppl_baseline.txt" 2>&1
 
-# CUDA_VISIBLE_DEVICES=0,1 SA3=True python -u eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 --quantize > "${LOG_OUTPUT_PATH}/fp4/${MODEL##*/}_ppl_sa3.txt" 2>&1
+# CUDA_VISIBLE_DEVICES=0,1 SA3=True python -u eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 --quantize > "${LOG_OUTPUT_PATH}/${MODEL##*/}_ppl_sa3.txt" 2>&1
 
-# CUDA_VISIBLE_DEVICES=0,1 SA3=True SEARCH=True python -u eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 --quantize > "${LOG_OUTPUT_PATH}/fp4/${MODEL##*/}_ppl_sa3_search.txt" 2>&1 
+# CUDA_VISIBLE_DEVICES=0,1 SA3=True SEARCH=True python -u eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 --quantize > "${LOG_OUTPUT_PATH}/${MODEL##*/}_ppl_sa3_search.txt" 2>&1 
 
-# CUDA_VISIBLE_DEVICES=0,1 NAIVE=True python -u eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 --quantize > "${LOG_OUTPUT_PATH}/fp4/${MODEL##*/}_ppl_naive.txt" 2>&1 
+# CUDA_VISIBLE_DEVICES=0,1 NAIVE=True python -u eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 --quantize > "${LOG_OUTPUT_PATH}/${MODEL##*/}_ppl_naive.txt" 2>&1 
 
-# CUDA_VISIBLE_DEVICES=0,1 NAIVE=True SEARCH=True python -u eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 --quantize > "${LOG_OUTPUT_PATH}/fp4/${MODEL##*/}_ppl_naive_search.txt" 2>&1 
+# CUDA_VISIBLE_DEVICES=0,1 NAIVE=True SEARCH=True python -u eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 --quantize > "${LOG_OUTPUT_PATH}/${MODEL##*/}_ppl_naive_search.txt" 2>&1 
 
-# CUDA_VISIBLE_DEVICES=0,1 python -u eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 --quantize > "${LOG_OUTPUT_PATH}/fp4/${MODEL##*/}_ppl_ssa.txt" 2>&1 
+# CUDA_VISIBLE_DEVICES=0,1 python -u eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 --quantize > "${LOG_OUTPUT_PATH}/${MODEL##*/}_ppl_ssa.txt" 2>&1 
