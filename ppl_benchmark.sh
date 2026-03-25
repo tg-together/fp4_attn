@@ -32,7 +32,7 @@ MODEL="meta-llama/Llama-3.1-8B"
 #Qwen/Qwen3-4B
 #meta-llama/Llama-3.1-70B
 
-CUDA_VISIBLE_DEVICES=0 python -u eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 > "${LOG_OUTPUT_PATH}/temp2.txt" 2>&1
+CUDA_VISIBLE_DEVICES=0 python -u eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 > "${LOG_OUTPUT_PATH}/fp4/${MODEL##*/}_ppl_baseline.txt" 2>&1
 
 # CUDA_VISIBLE_DEVICES=0,1 SA3=True python -u eval_ppl.py --model "${MODEL}" --dataset wikitext2 --hessian_dataset wikitext2 --quantize > "${LOG_OUTPUT_PATH}/fp4/${MODEL##*/}_ppl_sa3.txt" 2>&1
 
