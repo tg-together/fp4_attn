@@ -10,6 +10,12 @@ import argparse
 import json
 from fsspec import url_to_fs
 
+import llama_patch
+import qwen3_patch
+import transformers
+from llama_patch import llama_fp4_attention_forward
+from qwen3_patch import qwen3_fp4_attention_forward
+
 # from deepspeed.profiling.flops_profiler import FlopsProfiler
 
 __version__ = f"2.0_lighteval@{lighteval.__version__}"
@@ -68,14 +74,32 @@ def patch_attention():
 
 def main():
 
-    patch_attention()
-    llama_fp4_attention_forward.quantize_enabled = args.quantize
-    qwen3_fp4_attention_forward.quantize_enabled = args.quantize
+
+    torch.cuda.reset_peak_memory_stats()
+
 
 
     start = datetime.now()
     args = parse_args()
     fs, output_dir = url_to_fs(args.output_dir)
+
+    # Print all arguments at the start of job
+    print("=" * 80)
+    print("JOB STARTING - Arguments:")
+    print("=" * 80)
+    for arg, value in vars(args).items():
+        print(f"  {arg}: {value}")
+    print("=" * 80)
+
+
+    model_short = args.model.split('/')[-1] if '/' in args.model else args.model
+    llama_patch.hessian_folder = f"dumps/{model_short}_wikitext2"
+    qwen3_patch.hessian_folder = f"dumps/{model_short}_wikitext2"
+    patch_attention()
+    llama_fp4_attention_forward.quantize_enabled = args.quantize
+    qwen3_fp4_attention_forward.quantize_enabled = args.quantize
+
+
 
     max_model_length = args.max_model_length
     if args.max_model_length is None:
@@ -86,12 +110,25 @@ def main():
         max_model_length = None
 
     folder = args.model.replace("/", "_")
-    fname = f"{args.seed}-{args.temperature}-{args.top_p}-{args.task}-{args.max_new_tokens}"
-    if max_model_length != args.max_new_tokens:
-        fname += f"-{max_model_length}"
-    if not args.use_chat_template:
-        fname += "-nochat"
+    fname = f"seed_{args.seed}"
+    if args.quantize:
+        fname += "-quant"
+    if os.environ.get("SA3", "").lower() == "true":
+        fname += "-sa3"
     fpath = os.path.join(output_dir, folder, f"{fname}.json")
+    
+    # Check if evaluation is already completed
+    output_path = os.path.join(args.output_dir, f"{fname}.txt")
+    if os.path.exists(output_path):
+        try:
+            with open(output_path, 'r') as f:
+                lines = f.readlines()
+                if lines and lines[-1].strip() == "ALL RESULTS SAVED":
+                    print(f"Evaluation already completed for {fname}. Skipping.")
+                    return
+        except Exception as e:
+            print(f"Warning: Could not check completion status: {e}")
+    
     # if fs.exists(fpath) and not args.overwrite:
     #     print(f"File {fpath} already exists. Skipping.")
     #     return
@@ -126,7 +163,7 @@ def main():
         model_name=args.model,
         dtype=args.dtype,
         seed=args.seed,
-        # override_chat_template=args.use_chat_template,
+        # override_chat_template=True,
         max_model_length=max_model_length,
         max_num_seqs=args.batch_size,
         # system_prompt=system_prompt,
@@ -153,13 +190,24 @@ def main():
     
     
     # llm.start_profile()
+    print("Starting pipeline evaluation...")
+    eval_start_time = datetime.now()
     pipeline.evaluate()
+    eval_end_time = datetime.now()
+    eval_duration = eval_end_time - eval_start_time
+    print(f"Pipeline evaluation completed in {eval_duration.total_seconds():.2f} seconds")
     # llm.stop_profile()
 
     
     pipeline.show_results()
     results = pipeline.get_results()
     pipeline.save_and_push_results()
+
+    
+    torch.cuda.synchronize()
+    peak = torch.cuda.max_memory_allocated()
+
+    print(f"Peak GPU memory used: {peak / 1e9:.2f} GB")
 
     data = {
         "start_time": start.isoformat(),
@@ -195,13 +243,13 @@ def main():
     # save generated text
     task_name = list(details.keys())[0]
 
-    output_path = os.path.join(args.output_dir, f"{fname}.txt")
     with open(output_path, "w") as f:
         f.write(f"{results}\n")
         f.write("="*50 + "\n")
         for detail in details[task_name]:
             f.write(f"{detail}\n")
             f.write("="*50 + "\n")
+        f.write("ALL RESULTS SAVED\n")
     print(f"Generated text saved at {output_path}.")
 
 

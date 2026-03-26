@@ -16,7 +16,9 @@ set -e  # exit on error
 
 # python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu130
 
-# python -m pip install transformers==5.1.0 lighteval==0.13.0 matplotlib glog
+# python -m pip install transformers==4.57.6 lighteval==0.13.0 matplotlib glog
+
+# python -m pip install lighteval[vllm]==0.13.0
 
 
 # Install same pytorch as CUDA first
