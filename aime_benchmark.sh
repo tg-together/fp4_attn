@@ -12,7 +12,8 @@ export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 export HF_HOME="${BASE_PATH}/huggingface"
 export VLLM_ASSETS_CACHE="${BASE_PATH}/vllm_cache"
 export XDG_CACHE_HOME="${BASE_PATH}/vllm_cache"
-# export HF_HUB_OFFLINE=1
+
+export HF_HUB_OFFLINE=1
 
 # Create directories if they don't exist
 mkdir -p "${HF_HOME_DATASETS}"
@@ -49,11 +50,13 @@ nvidia-smi
 
 echo "${MODEL}"
 
-CUDA_VISIBLE_DEVICES=0 python lighteval_main.py --model "${MODEL}" --task aime24 --seed ${SEED} --batch_size 1  --max_samples 2 --output_dir $OUTPUT_PATH > "${LOG_OUTPUT_PATH}/${MODEL##*/}_seed${SEED}_baseline.txt" 2>&1
+CUDA_VISIBLE_DEVICES=0 python lighteval_main.py --model "${MODEL}" --task aime24 --seed ${SEED} --batch_size 1  --output_dir "${LOG_OUTPUT_PATH}/${MODEL##*/}" > "${LOG_OUTPUT_PATH}/${MODEL##*/}_seed${SEED}_baseline.txt" 2>&1
 
-# CUDA_VISIBLE_DEVICES=0 python lighteval_main.py --model "${MODEL}" --task aime24 --seed ${SEED} --batch_size 1  --max_samples 2 --quantize --output_dir $OUTPUT_PATH > "${LOG_OUTPUT_PATH}/${MODEL##*/}_seed${SEED}_ssa.txt" 2>&1
+CUDA_VISIBLE_DEVICES=0 python lighteval_main.py --model "${MODEL}" --task aime24 --seed ${SEED} --batch_size 1  --quantize --output_dir "${LOG_OUTPUT_PATH}/${MODEL##*/}" > "${LOG_OUTPUT_PATH}/${MODEL##*/}_seed${SEED}_ssa.txt" 2>&1
 
-# CUDA_VISIBLE_DEVICES=0 SA3=True python lighteval_main.py --model "${MODEL}" --task aime24 --seed ${SEED} --batch_size 1  --max_samples 2 --quantize --output_dir $OUTPUT_PATH > "${LOG_OUTPUT_PATH}/${MODEL##*/}_seed${SEED}_sa3.txt" 2>&1
+CUDA_VISIBLE_DEVICES=0 SA3=True python lighteval_main.py --model "${MODEL}" --task aime24 --seed ${SEED} --batch_size 1  --quantize --output_dir "${LOG_OUTPUT_PATH}/${MODEL##*/}" > "${LOG_OUTPUT_PATH}/${MODEL##*/}_seed${SEED}_sa3.txt" 2>&1
+
+
 echo "==============================="
 echo "AIME Evaluation Suite Complete!"
 echo "==============================="

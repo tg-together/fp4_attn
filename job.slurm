@@ -10,7 +10,7 @@
 #SBATCH --partition=gupta,desa,gpu        
 #SBATCH --gres=gpu:1   
 #SBATCH --constraint="a6000|6000ada|a100"
-#SBATCH --array=0-5                        # seeds: 0 to 9
+#SBATCH --array=0-31                        # seeds: 0 to 31
 #SBATCH --requeue 
 
 echo "Job $SLURM_JOB_ID, task $SLURM_ARRAY_TASK_ID running on $(hostname)"
