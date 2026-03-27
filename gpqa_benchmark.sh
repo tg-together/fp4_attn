@@ -49,11 +49,11 @@ nvidia-smi
 
 echo "${MODEL}"
 
-CUDA_VISIBLE_DEVICES=0 python lighteval_main.py --model "${MODEL}" --task gpqa --seed ${SEED} --batch_size 1 --max_samples 1 --output_dir "${LOG_OUTPUT_PATH}/${MODEL##*/}" > "${LOG_OUTPUT_PATH}/${MODEL##*/}_seed${SEED}_baseline.txt" 2>&1
+CUDA_VISIBLE_DEVICES=0 python lighteval_main.py --model "${MODEL}" --task gpqa --seed ${SEED} --batch_size 1 --output_dir "${LOG_OUTPUT_PATH}/${MODEL##*/}" > "${LOG_OUTPUT_PATH}/${MODEL##*/}_seed${SEED}_baseline.txt" 2>&1
 
-# CUDA_VISIBLE_DEVICES=0 python lighteval_main.py --model "${MODEL}" --task gpqa --seed ${SEED} --batch_size 1  --quantize --output_dir "${LOG_OUTPUT_PATH}/${MODEL##*/}" > "${LOG_OUTPUT_PATH}/${MODEL##*/}_seed${SEED}_ssa.txt" 2>&1
+CUDA_VISIBLE_DEVICES=0 python lighteval_main.py --model "${MODEL}" --task gpqa --seed ${SEED} --batch_size 1  --quantize --output_dir "${LOG_OUTPUT_PATH}/${MODEL##*/}" > "${LOG_OUTPUT_PATH}/${MODEL##*/}_seed${SEED}_ssa.txt" 2>&1
 
-# CUDA_VISIBLE_DEVICES=0 SA3=True python lighteval_main.py --model "${MODEL}" --task gpqa --seed ${SEED} --batch_size 1  --quantize --output_dir "${LOG_OUTPUT_PATH}/${MODEL##*/}" > "${LOG_OUTPUT_PATH}/${MODEL##*/}_seed${SEED}_sa3.txt" 2>&1
+CUDA_VISIBLE_DEVICES=0 SA3=True python lighteval_main.py --model "${MODEL}" --task gpqa --seed ${SEED} --batch_size 1  --quantize --output_dir "${LOG_OUTPUT_PATH}/${MODEL##*/}" > "${LOG_OUTPUT_PATH}/${MODEL##*/}_seed${SEED}_sa3.txt" 2>&1
 
 echo "==============================="
 echo "GPQA Evaluation Suite Complete!"

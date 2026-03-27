@@ -10,8 +10,9 @@
 #SBATCH --partition=gupta,desa,gpu        
 #SBATCH --gres=gpu:1   
 #SBATCH --constraint="a6000|6000ada|a100"
-#SBATCH --array=0-31                        # seeds: 0 to 31
+#SBATCH --array=0-31           # seeds: 0 to 31
 #SBATCH --requeue 
+#SBATCH --exclude=owens-compute-01,owens-compute-02,unicorn-compute-03,genai-large-01,lil-compute-05,bhattacharjee-compute-02,jjs533-compute-03
 
 echo "Job $SLURM_JOB_ID, task $SLURM_ARRAY_TASK_ID running on $(hostname)"
 
@@ -22,4 +23,4 @@ echo "Running seed: $SEED"
 echo "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
 
 # run your benchmark
-bash aime_benchmark.sh $SEED
+bash gpqa_benchmark.sh $SEED
