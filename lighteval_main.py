@@ -9,6 +9,7 @@ from datetime import datetime
 import argparse
 import json
 from fsspec import url_to_fs
+import os
 
 import llama_patch
 import qwen3_patch
@@ -76,6 +77,12 @@ def main():
 
 
     torch.cuda.reset_peak_memory_stats()
+
+    job_id = os.environ.get("SLURM_JOB_ID")
+    node_name = os.environ.get("SLURMD_NODENAME")  # or SLURM_NODELIST
+
+    print(f"Job ID: {job_id}")
+    print(f"Node: {node_name}")
 
 
 
