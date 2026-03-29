@@ -2,8 +2,9 @@ import os
 import lighteval
 import torch
 from lighteval.logging.evaluation_tracker import EvaluationTracker
-from lighteval.models.vllm.vllm_model import VLLMModelConfig
+from lighteval.models.transformers.transformers_model import TransformersModelConfig
 from lighteval.models.model_input import GenerationParameters
+from lighteval.models.vllm.vllm_model import VLLMModelConfig
 from lighteval.pipeline import ParallelismManager, Pipeline, PipelineParameters
 from datetime import datetime
 import argparse
@@ -16,6 +17,8 @@ import qwen3_patch
 import transformers
 from llama_patch import llama_fp4_attention_forward
 from qwen3_patch import qwen3_fp4_attention_forward
+
+print("IMported")
 
 # from deepspeed.profiling.flops_profiler import FlopsProfiler
 
@@ -40,7 +43,7 @@ def parse_args():
     parser.add_argument("--repetition_penalty", type=float, default=None)
     parser.add_argument("--task", type=str, required=True)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--max_new_tokens", type=int, default=32768)
+    parser.add_argument("--max_new_tokens", type=int, default=500)
     parser.add_argument("--max_model_length", type=int, default=None)
     parser.add_argument("--dtype", type=str, default="bfloat16")
     parser.add_argument("--token_forcing", type=int, default=None)
@@ -72,11 +75,16 @@ def patch_attention():
     transformers.models.llama.modeling_llama.LlamaForCausalLM.__init__ = patched_init_llama
     transformers.models.qwen3.modeling_qwen3.Qwen3ForCausalLM.__init__ = patched_init_qwen3
 
+from datetime import timedelta
+from accelerate import Accelerator, InitProcessGroupKwargs
+accelerator = Accelerator(kwargs_handlers=[InitProcessGroupKwargs(timeout=timedelta(seconds=3000))])
+
+
 
 def main():
 
 
-    torch.cuda.reset_peak_memory_stats()
+
 
     job_id = os.environ.get("SLURM_JOB_ID")
     node_name = os.environ.get("SLURMD_NODENAME")  # or SLURM_NODELIST
@@ -156,7 +164,7 @@ def main():
     )
  
     pipeline_params = PipelineParameters(
-        launcher_type=ParallelismManager.VLLM,
+        launcher_type=ParallelismManager.ACCELERATE,
         job_id=0,
         dataset_loading_processes=1,
         num_fewshot_seeds=1,
@@ -165,15 +173,16 @@ def main():
         remove_reasoning_tags=False
     )
 
-
-    model_config = VLLMModelConfig(
+    model_config = TransformersModelConfig(
         model_name=args.model,
+        batch_size=None,
         dtype=args.dtype,
-        seed=args.seed,
-        # override_chat_template=True,
-        max_model_length=max_model_length,
-        max_num_seqs=args.batch_size,
-        # system_prompt=system_prompt,
+        trust_remote_code=True,
+        compile=True,
+        max_len = max_model_length,
+        #override_chat_template=True,
+        # model_parallel=True,
+        # continuous_batching=True,
         generation_parameters=GenerationParameters(
             max_new_tokens=args.max_new_tokens,
             seed=args.seed,
@@ -181,8 +190,28 @@ def main():
             top_p=args.top_p,
             top_k=args.top_k,
             repetition_penalty=args.repetition_penalty,
-        ),
+        )
     )
+
+    # model_config = VLLMModelConfig(
+    #     model_name=args.model,
+    #     dtype=args.dtype,
+    #     seed=args.seed,
+    #     # override_chat_template=True,
+    #     max_model_length=max_model_length,
+    #     max_num_seqs=args.batch_size,
+    #     # system_prompt=system_prompt,
+    #     generation_parameters=GenerationParameters(
+    #         max_new_tokens=args.max_new_tokens,
+    #         seed=args.seed,
+    #         temperature=args.temperature,
+    #         top_p=args.top_p,
+    #         top_k=args.top_k,
+    #         repetition_penalty=args.repetition_penalty,
+    #     ),
+    # )
+
+
 
     pipeline = Pipeline(
         tasks=args.task,
@@ -192,7 +221,7 @@ def main():
         metric_options={},
     )
 
-    llm=pipeline.model.model
+    print("Type:,",type(pipeline.model))
 
     
     

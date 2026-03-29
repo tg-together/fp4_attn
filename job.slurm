@@ -3,10 +3,10 @@
 #SBATCH -o slurm_logs/aime_%A_%a.out        # %A = job ID, %a = array task ID
 #SBATCH -e slurm_logs/aime_%A_%a.err
 #SBATCH -N 1
-#SBATCH -n 10
-#SBATCH --cpus-per-task=5
+#SBATCH -n 1
+#SBATCH --cpus-per-task=10
 #SBATCH --mem=100G
-#SBATCH -t 24:00:00
+#SBATCH -t 48:00:00
 #SBATCH --partition=gupta,desa,gpu        
 #SBATCH --gres=gpu:1   
 #SBATCH --constraint="a6000|6000ada|a100"
@@ -23,4 +23,4 @@ echo "Running seed: $SEED"
 echo "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
 
 # run your benchmark
-bash gpqa_benchmark.sh $SEED
+bash aime_benchmark.sh $SEED
